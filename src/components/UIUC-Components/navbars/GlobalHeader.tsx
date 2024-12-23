@@ -105,6 +105,7 @@ import { extractEmailsFromClerk } from '../clerkHelpers'
 import { useEffect, useState } from 'react'
 import { usePostHog } from 'posthog-js/react'
 import { IconFilePlus } from '@tabler/icons-react'
+import { useAuth } from 'react-oidc-context';
 
 export function LandingPageHeader({
   forGeneralPurposeNotLandingpage = false,
@@ -126,75 +127,84 @@ export function LandingPageHeader({
         padding: '1em',
       }
 
-  const clerk_obj = useUser()
+  // const clerk_obj = useUser()
+  const auth = useAuth();
   const [userEmail, setUserEmail] = useState('no_email')
   const [isLoaded, setIsLoaded] = useState(false)
   const posthog = usePostHog()
 
-  useEffect(() => {
-    if (clerk_obj.isLoaded) {
-      if (clerk_obj.isSignedIn) {
-        const emails = extractEmailsFromClerk(clerk_obj.user)
-        setUserEmail(emails[0] || 'no_email')
+  // useEffect(() => {
+  //   if (clerk_obj.isLoaded) {
+  //     if (clerk_obj.isSignedIn) {
+  //       const emails = extractEmailsFromClerk(clerk_obj.user)
+  //       setUserEmail(emails[0] || 'no_email')
 
-        // Posthog identify
-        posthog?.identify(clerk_obj.user.id, {
-          email: emails[0] || 'no_email',
-        })
-      }
-      setIsLoaded(true)
-    } else {
-      // console.debug('NOT LOADED OR SIGNED IN')
-    }
-  }, [clerk_obj.isLoaded])
+  //       // Posthog identify
+  //       posthog?.identify(clerk_obj.user.id, {
+  //         email: emails[0] || 'no_email',
+  //       })
+  //     }
+  //     setIsLoaded(true)
+  //   } else {
+  //     // console.debug('NOT LOADED OR SIGNED IN')
+  //   }
+  // }, [clerk_obj.isLoaded])
 
-  if (!isLoaded) {
-    return (
-      <header style={headerStyle} className="py-16">
-        {/* Skeleton placeholders for two icons */}
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          {forGeneralPurposeNotLandingpage === false && (
-            <>
-              <Link href="/new" className={classes.link}>
-                <span style={{ display: 'flex', alignItems: 'center' }}>
-                  <FileIcon />
-                  <span
-                    className={`${montserrat_heading.variable} font-montserratHeading`}
-                  >
-                    New project
-                  </span>
-                </span>
-              </Link>
-              <Link
-                href="https://docs.uiuc.chat/"
-                className={classes.link}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <span style={{ display: 'flex', alignItems: 'center' }}>
-                  <IconClipboardTexts />
-                  <span
-                    className={`${montserrat_heading.variable} font-montserratHeading`}
-                  >
-                    Docs
-                  </span>
-                </span>
-              </Link>
-            </>
-          )}
-          <div
-            className="skeleton-box"
-            style={{ width: '35px', height: '35px', borderRadius: '50%' }}
-          ></div>
-          <div style={{ paddingLeft: '0px', paddingRight: '10px' }} />
-          <div
-            className="skeleton-box"
-            style={{ width: '35px', height: '35px', borderRadius: '50%' }}
-          ></div>
-        </div>
-      </header>
-    )
-  }
+  const handleLogin = () => {
+    auth.signinRedirect();
+  };
+
+  const handleLogout = () => {
+    auth.removeUser();
+  };
+
+  // if (!isLoaded) {
+  //   return (
+  //     <header style={headerStyle} className="py-16">
+  //       {/* Skeleton placeholders for two icons */}
+  //       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+  //         {forGeneralPurposeNotLandingpage === false && (
+  //           <>
+  //             <Link href="/new" className={classes.link}>
+  //               <span style={{ display: 'flex', alignItems: 'center' }}>
+  //                 <FileIcon />
+  //                 <span
+  //                   className={`${montserrat_heading.variable} font-montserratHeading`}
+  //                 >
+  //                   New project
+  //                 </span>
+  //               </span>
+  //             </Link>
+  //             <Link
+  //               href="https://docs.uiuc.chat/"
+  //               className={classes.link}
+  //               target="_blank"
+  //               rel="noopener noreferrer"
+  //             >
+  //               <span style={{ display: 'flex', alignItems: 'center' }}>
+  //                 <IconClipboardTexts />
+  //                 <span
+  //                   className={`${montserrat_heading.variable} font-montserratHeading`}
+  //                 >
+  //                   Docs
+  //                 </span>
+  //               </span>
+  //             </Link>
+  //           </>
+  //         )}
+  //         <div
+  //           className="skeleton-box"
+  //           style={{ width: '35px', height: '35px', borderRadius: '50%' }}
+  //         ></div>
+  //         <div style={{ paddingLeft: '0px', paddingRight: '10px' }} />
+  //         <div
+  //           className="skeleton-box"
+  //           style={{ width: '35px', height: '35px', borderRadius: '50%' }}
+  //         ></div>
+  //       </div>
+  //     </header>
+  //   )
+  // }
 
   return (
     <header style={headerStyle}>
@@ -228,41 +238,21 @@ export function LandingPageHeader({
             </Link>
           </>
         )}
-        <SignedIn>
-          {/* Docs: https://www.magicbell.com/docs/libraries/react#custom-themes */}
-          {/* <MagicBell
-            apiKey={process.env.NEXT_PUBLIC_MAGIC_BELL_API as string}
-            userEmail={userEmail}
-            theme={magicBellTheme}
-            locale="en"
-            images={{
-              emptyInboxUrl:
-                'https://assets.kastan.ai/minified_empty_chat_art.png',
-            }}
-          >
-            {(props) => (
-              <FloatingNotificationInbox width={400} height={500} {...props} />
-            )}
-          </MagicBell> */}
-          {/* Add a bit of spacing with an empty div */}
-          <div />
-          {/* appearance={ } */}
-          <div style={{ all: 'unset' }}>
-            <UserButton />
-          </div>
-        </SignedIn>
-        <SignedOut>
-          {/* Signed out users get sign in button */}
-          <SignInButton>
-            <button className={classes.link}>
-              <span
-                className={`${montserrat_heading.variable} font-montserratHeading`}
-              >
-                Sign in / Sign up
-              </span>
-            </button>
-          </SignInButton>
-        </SignedOut>
+        
+        {auth.isAuthenticated ? (
+          <button onClick={() => auth.removeUser()} className={classes.link}>
+            <span className={`${montserrat_heading.variable} font-montserratHeading`}>
+              Sign Out
+            </span>
+          </button>
+        ) : (
+          <button onClick={() => auth.signinRedirect()} className={classes.link}>
+            <span className={`${montserrat_heading.variable} font-montserratHeading`}>
+              Sign in / Sign up
+            </span>
+          </button>
+        )}
+        
       </Group>
     </header>
   )

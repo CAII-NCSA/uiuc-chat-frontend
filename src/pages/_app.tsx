@@ -17,6 +17,8 @@ import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
 
 import { SpeedInsights } from "@vercel/speed-insights/next"
 import { Analytics } from '@vercel/analytics/next';
+import { KeycloakProvider } from '../components/Auth/KeycloakProvider';
+import { AuthProvider } from 'react-oidc-context'
 
 // Check that PostHog is client-side (used to handle Next.js SSR)
 if (typeof window !== 'undefined') {
@@ -30,7 +32,12 @@ if (typeof window !== 'undefined') {
     },
   })
 }
-
+// Add this configuration at the top of your file
+const oidcConfig = {
+  authority: `${process.env.NEXT_PUBLIC_KEYCLOAK_URL}/realms/${process.env.NEXT_PUBLIC_KEYCLOAK_REALM}`,
+  client_id: process.env.NEXT_PUBLIC_KEYCLOAK_CLIENT_ID,
+  redirect_uri: typeof window !== 'undefined' ? `${window.location.origin}/` : undefined,
+};
 const MyApp: AppType = ({ Component, pageProps: { ...pageProps } }) => {
   const router = useRouter()
   const queryClient = new QueryClient()
@@ -49,6 +56,8 @@ const MyApp: AppType = ({ Component, pageProps: { ...pageProps } }) => {
     return <Maintenance />
   } else {
     return (
+      <AuthProvider {...oidcConfig}>
+      <KeycloakProvider>
       <PostHogProvider client={posthog}>
         <SpeedInsights />
         <Analytics />
@@ -123,6 +132,8 @@ const MyApp: AppType = ({ Component, pageProps: { ...pageProps } }) => {
           </ClerkLoaded>
         </ClerkProvider>
       </PostHogProvider>
+      </KeycloakProvider>
+      </AuthProvider>
     )
   }
 }
