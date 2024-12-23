@@ -1,7 +1,7 @@
-import { useUser } from '@clerk/nextjs'
 import { NextPage } from 'next'
 import { useRouter } from 'next/router'
 import { useEffect, useState } from 'react'
+import { useAuth } from 'react-oidc-context'; 
 import { CanViewOnlyCourse } from '~/components/UIUC-Components/CanViewOnlyCourse'
 import { CannotViewCourse } from '~/components/UIUC-Components/CannotViewCourse'
 import { LoadingSpinner } from '~/components/UIUC-Components/LoadingSpinner'
@@ -11,16 +11,17 @@ import { CourseMetadata } from '~/types/courseMetadata'
 
 const NotAuthorizedPage: NextPage = () => {
   const router = useRouter()
-  const clerk_user = useUser()
-  const [componentToRender, setComponentToRender] =
-    useState<React.ReactNode | null>(null)
+  // Replace Clerk with OIDC auth
+  const { user, isLoading, isAuthenticated } = useAuth()
+  const [componentToRender, setComponentToRender] = useState<React.ReactNode | null>(null)
 
   const getCurrentPageName = () => {
     return router.asPath.slice(1).split('/')[0] as string
   }
 
   useEffect(() => {
-    if (!clerk_user.isLoaded || !router.isReady) {
+    // Update loading check
+    if (isLoading || !router.isReady) {
       return
     }
     const course_name = getCurrentPageName()
@@ -29,15 +30,20 @@ const NotAuthorizedPage: NextPage = () => {
       try {
         const response = await fetch(
           `/api/UIUC-api/getCourseMetadata?course_name=${course_name}`,
+          {
+            headers: {
+              // Add authorization header if needed
+              ...(user?.access_token && {
+                Authorization: `Bearer ${user.access_token}`
+              })
+            }
+          }
         )
 
-        // TODO: replace this with the util functions for fetchCourseMetadata() and with get_user_permission()
         if (response.ok) {
           const data = await response.json()
           if (data.success === false) {
-            console.error(
-              'not_authorized.tsx -- An error occurred while fetching course metadata',
-            )
+            console.error('An error occurred while fetching course metadata')
             return null
           }
           return data.course_metadata
@@ -58,37 +64,23 @@ const NotAuthorizedPage: NextPage = () => {
         return
       }
 
-      if (courseMetadata.is_private && !clerk_user.isSignedIn) {
-        console.log(
-          'User not logged in',
-          clerk_user.isSignedIn,
-          clerk_user.isLoaded,
-          course_name,
-        )
-        router.replace(`/sign-in?${course_name}`)
+      // Update authentication check
+      if (courseMetadata.is_private && !isAuthenticated) {
+        console.log('User not logged in')
+        router.replace(`/login?redirect=${course_name}`)
         return
       }
 
-      if (clerk_user.isLoaded) {
-        console.log(
-          'in [course_name]/index.tsx -- clerk_user loaded and working :)',
-        )
+      // Update user loaded check
+      if (!isLoading) {
         if (courseMetadata != null) {
           const permission_str = get_user_permission(
             courseMetadata,
-            clerk_user,
+            user, // You'll need to update the get_user_permission function to work with OIDC user
             router,
           )
 
-          console.log(
-            'in [course_name]/index.tsx -- permission_str',
-            permission_str,
-          )
-
           if (permission_str == 'edit') {
-            console.log(
-              'in [course_name]/index.tsx - Course exists & user is properly authed, CanViewOnlyCourse',
-            )
             router.push(`/${course_name}/dashboard`)
           } else if (permission_str == 'view') {
             setComponentToRender(
@@ -101,19 +93,14 @@ const NotAuthorizedPage: NextPage = () => {
             setComponentToRender(<CannotViewCourse course_name={course_name} />)
           }
         } else {
-          console.log('Course does not exist, redirecting to materials page')
           router.push(`/${course_name}/dashboard`)
         }
-      } else {
-        console.log(
-          'in [course_name]/index.tsx -- clerk_user NOT LOADED yet...',
-        )
       }
     })
-  }, [clerk_user.isLoaded, router.isReady])
+  }, [isLoading, router.isReady, user, isAuthenticated])
 
-  if (!clerk_user.isLoaded || !componentToRender) {
-    console.debug('not_authorized.tsx -- Loading spinner')
+  // Update loading check
+  if (isLoading || !componentToRender) {
     return (
       <MainPageBackground>
         <LoadingSpinner />

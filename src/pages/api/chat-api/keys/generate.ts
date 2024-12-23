@@ -4,7 +4,11 @@ import { NextApiRequest, NextApiResponse } from 'next'
 import { supabase } from '@/utils/supabaseClient'
 import { v4 as uuidv4 } from 'uuid'
 import posthog from 'posthog-js'
-import { getAuth } from '@clerk/nextjs/server'
+
+interface KeycloakTokenPayload {
+  sub: string;
+  // add other expected token fields
+}
 
 type ApiResponse = {
   message?: string
@@ -30,80 +34,65 @@ export default async function generateKey(
     return res.status(405).json({ error: 'Method not allowed' })
   }
 
-  // Get the current user's email
-  const currUserId = getAuth(req).userId
-  console.log('Generating api key for: ', currUserId)
-
-  // Ensure the user email is present
-  if (!currUserId) {
-    return res.status(401).json({ error: 'User email is required' })
-  }
-
   try {
-    // Check if the user already has an API key
+    // Get and validate token
+    const authHeader = req.headers.authorization
+    if (!authHeader?.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Missing or invalid authorization header' })
+    }
+    
+    const token = authHeader.split(' ')[1]
+    if (!token) {
+      return res.status(401).json({ error: 'Invalid token format' })
+    }
+
+    // Validate token with Keycloak
+    const userInfo = await validateToken(token, {
+      url: process.env.KEYCLOAK_URL,
+      realm: process.env.KEYCLOAK_REALM,
+      clientId: process.env.KEYCLOAK_CLIENT_ID
+    })
+    
+    const userId = userInfo.sub
+
+    // Check for existing key
     const { data: keys, error: existingKeyError } = await supabase
       .from('api_keys')
       .select('key, is_active')
-      .eq('user_id', currUserId)
+      .eq('user_id', userId)
 
-    if (existingKeyError) {
-      console.error('Error retrieving existing API key:', existingKeyError)
-      throw existingKeyError
-    }
-
+    if (existingKeyError) throw existingKeyError
     if (keys.length > 0 && keys[0]?.is_active) {
       return res.status(409).json({ error: 'User already has an API key' })
     }
 
-    // Generate a new API key
-    const rawApiKey = uuidv4()
+    // Generate new key
+    const apiKey = `uc_${uuidv4().replace(/-/g, '')}`
 
-    // Create a sanitized API key by removing dashes and adding a prefix
-    const apiKey = `uc_${rawApiKey.replace(/-/g, '')}`
+    // Insert or update key
+    const { error } = keys.length === 0
+      ? await supabase
+          .from('api_keys')
+          .insert([{ user_id: userId, key: apiKey, is_active: true }])
+      : await supabase
+          .from('api_keys')
+          .update({ key: apiKey, is_active: true })
+          .match({ user_id: userId })
 
-    if (keys.length === 0) {
-      // Insert the new API key into the database
-      const { error: insertError } = await supabase
-        .from('api_keys')
-        .insert([{ user_id: currUserId, key: apiKey, is_active: true }])
+    if (error) throw error
 
-      if (insertError) {
-        throw insertError
-      }
-    } else {
-      // Update the existing API key
-      const { error: updateError } = await supabase
-        .from('api_keys')
-        .update({ key: apiKey, is_active: true })
-        .match({ user_id: currUserId })
-
-      if (updateError) {
-        throw updateError
-      }
-    }
-
-    // Track the API key generation event
-    posthog.capture('api_key_generated', {
-      currUserId,
-      apiKey,
-    })
-
-    // Respond with the generated API key
     return res.status(200).json({
       message: 'API key generated successfully',
       apiKey,
     })
+
   } catch (error) {
-    // Log the error for debugging purposes
     console.error('Error generating API key:', error)
-
-    // Track the API key generation failure event
-    posthog.capture('api_key_generation_failed', {
-      userId: currUserId,
-      error: (error as Error).message,
-    })
-
-    // Respond with a server error message
     return res.status(500).json({ error: 'Internal server error' })
   }
+}
+
+async function validateToken(token: string, config: any): Promise<KeycloakTokenPayload> {
+  // Implement token validation with Keycloak
+  throw new Error('Token validation not implemented')
 }
