@@ -2,11 +2,33 @@
 
 import { NextApiRequest, NextApiResponse } from 'next'
 import { supabase } from '~/utils/supabaseClient'
-import { clerkClient } from '@clerk/nextjs/server'
 import posthog from 'posthog-js'
 import { NextRequest, NextResponse } from 'next/server'
 
+async function verifyKeycloakToken(token: string) {
+  const keycloakUrl = process.env.NEXT_PUBLIC_KEYCLOAK_URL
+  const realm = process.env.NEXT_PUBLIC_KEYCLOAK_REALM
+  
+  try {
+    const response = await fetch(
+      `${keycloakUrl}/realms/${realm}/protocol/openid-connect/userinfo`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      }
+    )
 
+    if (!response.ok) {
+      return null
+    }
+
+    return await response.json()
+  } catch (error) {
+    console.error('Token verification failed:', error)
+    return null
+  }
+}
 
 /**
  * Validates the provided API key and retrieves the associated user data.
@@ -20,8 +42,6 @@ export async function validateApiKeyAndRetrieveData(
   apiKey: string,
   course_name: string,
 ) {
-  // console.log('Validating apiKey', apiKey, ' for course_name', course_name)
-  // Attempt to retrieve the user ID associated with the API key from the database.
   const { data, error } = (await supabase
     .from('api_keys')
     .select('user_id')
@@ -29,30 +49,26 @@ export async function validateApiKeyAndRetrieveData(
     .eq('is_active', true)
     .single()) as { data: { user_id: string } | null; error: Error | null }
 
-  // console.log('data', data)
-
-  // Determine if the API key is valid based on the absence of errors and presence of data.
   const isValidApiKey = !error && data !== null
   let userObject = null
 
-  // console.log('isValidApiKey', isValidApiKey)
   if (isValidApiKey) {
     try {
-      // Retrieve the full Clerk user object using the user ID.
-      userObject = await clerkClient.users.getUser(data.user_id)
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_KEYCLOAK_URL}/realms/${process.env.NEXT_PUBLIC_KEYCLOAK_REALM}/protocol/openid-connect/userinfo`,
+        {
+          headers: {
+            Authorization: `Bearer ${apiKey}`
+          }
+        }
+      )
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch user info from Keycloak')
+      }
+      
+      userObject = await response.json()
 
-      // Todo: Create a procedure to increment the API call count for the user.
-      /**
-       * create function increment (usage int, apikey string)
-        returns void as
-        $$
-          update api_keys 
-          set usage_count = usage_count + usage
-          where api_key = apiKey
-        $$ 
-        language sql volatile;
-       */
-      // Increment the API call count for the user.
       const { error: updateError } = await supabase.rpc('increment', {
         usage: 1,
         apikey: apiKey,
@@ -62,22 +78,21 @@ export async function validateApiKeyAndRetrieveData(
         console.error('Error updating API call count:', updateError)
         throw updateError
       }
-      // Track the event in PostHog
+
       posthog.capture('api_key_validated', {
-        userId: userObject.id,
+        userId: userObject.sub, // Keycloak uses 'sub' for user ID
         apiKey: apiKey,
       })
     } catch (userError) {
-      // Log the error if there's an issue retrieving the user object.
       console.error('Error retrieving user object:', userError)
       posthog.capture('api_key_validation_failed', {
-        userId: userObject?.id,
+        userId: userObject?.sub,
         error: (userError as Error).message,
       })
       throw userError
     }
   }
-  // console.log('userObject', userObject, 'isValidApiKey', isValidApiKey)
+
   return { isValidApiKey, userObject }
 }
 
@@ -87,33 +102,36 @@ export async function validateApiKeyAndRetrieveData(
  * @param {NextApiRequest} req - The incoming HTTP request.
  * @param {NextApiResponse} res - The outgoing HTTP response.
  */
-export default async function handler(req: NextRequest, res: NextResponse) {
+export default async function handler(req: NextRequest) {
   try {
-    console.log('req: ', req)
-    // Extract the API key and course name from the request body.
-    const { api_key, course_name } = (await req.json()) as {
-      api_key: string
-      course_name: string
+    const authHeader = req.headers.get('authorization')
+    if (!authHeader?.startsWith('Bearer ')) {
+      return NextResponse.json({ error: 'Missing or invalid authorization header' }, { status: 401 })
     }
 
-    // console.log('api_key', api_key, 'course_name', course_name)
+    const token = authHeader.split(' ')[1]
+    if (!token) {
+      return NextResponse.json({ error: 'Invalid authorization header format' }, { status: 401 })
+    }
 
-    // Validate the API key and retrieve the user object.
+    const userInfo = await verifyKeycloakToken(token)
+    if (!userInfo) {
+      return NextResponse.json({ error: 'Invalid or expired token' }, { status: 401 })
+    }
+
+    const { api_key, course_name } = await req.json()
+
     const { isValidApiKey, userObject } = await validateApiKeyAndRetrieveData(
       api_key,
       course_name,
     )
 
     if (!isValidApiKey) {
-      // Respond with a 403 Forbidden status if the API key is invalid.
       return NextResponse.json({ error: 'Invalid API key' }, { status: 403 })
-      return
     }
 
-    // Respond with the user object if the API key is valid.
     return NextResponse.json({ userObject }, { status: 200 })
   } catch (error) {
-    // Respond with a 500 Internal Server Error status if an exception occurs.
     console.error('Error in handler:', error)
     return NextResponse.json(
       { error: 'An error occurred while validating the API key' },

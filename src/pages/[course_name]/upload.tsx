@@ -2,7 +2,6 @@ import { type NextPage } from 'next'
 import MakeNomicVisualizationPage from '~/components/UIUC-Components/MakeQueryAnalysisPage'
 import React, { useEffect, useState } from 'react'
 import { useRouter } from 'next/router'
-import { useUser } from '@clerk/nextjs'
 import { CannotEditGPT4Page } from '~/components/UIUC-Components/CannotEditGPT4'
 import { LoadingSpinner } from '~/components/UIUC-Components/LoadingSpinner'
 import {
@@ -13,7 +12,6 @@ import { AuthComponent } from '~/components/UIUC-Components/AuthToEditCourse'
 import { fetchCourseMetadata } from '~/utils/apiUtils'
 import { CourseMetadata } from '~/types/courseMetadata'
 import LargeDropzone from '~/components/UIUC-Components/LargeDropzone'
-import { extractEmailsFromClerk } from '~/components/UIUC-Components/clerkHelpers'
 import Navbar from '~/components/UIUC-Components/navbars/Navbar'
 import Head from 'next/head'
 import { Card, Flex, SimpleGrid, Title } from '@mantine/core'
@@ -27,14 +25,15 @@ import MITIngestForm from '~/components/UIUC-Components/MITIngestForm'
 import CourseraIngestForm from '~/components/UIUC-Components/CourseraIngestForm'
 import SupportedFileUploadTypes from '~/components/UIUC-Components/SupportedFileUploadTypes'
 import { CannotEditCourse } from '~/components/UIUC-Components/CannotEditCourse'
+import { useAuth } from "react-oidc-context";
 
 const CourseMain: NextPage = () => {
   const router = useRouter()
+  const auth = useAuth()
   const [projectName, setProjectName] = useState<string | null>(null)
-  const { user, isLoaded, isSignedIn } = useUser()
   const [isFetchingCourseMetadata, setIsFetchingCourseMetadata] = useState(true)
-  const user_emails = extractEmailsFromClerk(user)
   const [metadata, setProjectMetadata] = useState<CourseMetadata | null>()
+
   const getCurrentPageName = () => {
     return router.query.course_name as string
   }
@@ -44,9 +43,7 @@ const CourseMain: NextPage = () => {
     const fetchCourseData = async () => {
       const local_course_name = getCurrentPageName()
 
-      // Check exists
-      const metadata: CourseMetadata =
-        await fetchCourseMetadata(local_course_name)
+      const metadata = await fetchCourseMetadata(local_course_name)
       if (metadata === null) {
         await router.push('/new?course_name=' + local_course_name)
         return
@@ -58,30 +55,31 @@ const CourseMain: NextPage = () => {
     fetchCourseData()
   }, [router.isReady])
 
+  // Check if user has permission to edit course
   if (
-    metadata &&
-    user_emails[0] !== (metadata.course_owner as string) &&
-    metadata.course_admins.indexOf(getCurrentPageName()) === -1
+    metadata?.course_owner !== auth.user?.profile.email &&
+    !metadata?.course_admins.includes(getCurrentPageName())
   ) {
     router.replace(`/${getCurrentPageName()}/not_authorized`)
-
     return <CannotEditCourse course_name={getCurrentPageName() as string} />
   }
-  // Check auth - https://clerk.com/docs/nextjs/read-session-and-user-data
-  if (!isLoaded || isFetchingCourseMetadata || projectName == null) {
+
+  // Loading state
+  if (!auth.isLoading || isFetchingCourseMetadata || projectName == null) {
     return <LoadingPlaceholderForAdminPages />
   }
 
-  if (!isSignedIn) {
-    console.log('User not logged in', isSignedIn, isLoaded, projectName)
-    return <AuthComponent course_name={projectName as string} />
+  // Check authentication
+  if (!auth.isAuthenticated) {
+    auth.signinRedirect() // Redirect to Keycloak login
+    return <LoadingPlaceholderForAdminPages />
   }
 
-  // Don't edit certain special pages (no context allowed)
+  // Don't edit certain special pages
   if (
-    projectName.toLowerCase() == 'gpt4' ||
-    projectName.toLowerCase() == 'global' ||
-    projectName.toLowerCase() == 'extreme'
+    projectName.toLowerCase() === 'gpt4' ||
+    projectName.toLowerCase() === 'global' ||
+    projectName.toLowerCase() === 'extreme'
   ) {
     return <CannotEditGPT4Page course_name={projectName as string} />
   }
@@ -112,4 +110,5 @@ const CourseMain: NextPage = () => {
     </>
   )
 }
+
 export default CourseMain

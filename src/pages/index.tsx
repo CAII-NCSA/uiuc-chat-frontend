@@ -3,6 +3,7 @@ import { type NextPage } from 'next'
 import Head from 'next/head'
 import Link from 'next/link'
 import React from 'react'
+import { useAuth } from "react-oidc-context";
 
 import {
   // MantineProvider,
@@ -19,8 +20,12 @@ import {
 import { LandingPageHeader } from '~/components/UIUC-Components/navbars/GlobalHeader'
 import GlobalFooter from '~/components/UIUC-Components/GlobalFooter'
 import { montserrat_heading, montserrat_paragraph } from 'fonts'
+import { AuthProvider } from "react-oidc-context";
+
 
 const Home: NextPage = () => {
+  const auth = useAuth();
+  console.log('User profile:', auth.user?.profile);
   return (
     <>
       <Head>
@@ -39,6 +44,18 @@ const Home: NextPage = () => {
           <h1 className="text-5xl font-extrabold tracking-tight text-white sm:text-[5rem]">
             UIUC.<span className="text-[hsl(280,100%,70%)]">chat</span>
           </h1>
+          {auth.isAuthenticated && (
+              <div className="mt-2 flex items-center gap-2 rounded-lg bg-white/10 px-4 py-2">
+                <span className="text-sm text-gray-300">Logged in as:</span>
+                <span className="text-sm font-semibold text-[hsl(280,100%,70%)]">
+                {auth.user?.profile.email || 
+                  auth.user?.profile.name ||
+                  auth.user?.profile.given_name ||
+                  auth.user?.profile.preferred_username ||
+                  'User'}
+                </span>
+              </div>
+            )}
           <div className="w-full max-w-4xl">
             {/* size="lg"
             py="l"

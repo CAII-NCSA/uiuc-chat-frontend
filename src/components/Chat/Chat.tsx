@@ -42,8 +42,6 @@ interface Props {
 }
 
 import { useRouter } from 'next/router'
-import { useUser } from '@clerk/nextjs'
-import { extractEmailsFromClerk } from '../UIUC-Components/clerkHelpers'
 import ChatNavbar from '../UIUC-Components/navbars/ChatNavbar'
 import { notifications } from '@mantine/notifications'
 import { Montserrat } from 'next/font/google'
@@ -74,6 +72,8 @@ import { motion } from 'framer-motion'
 import { useDeleteMessages } from '~/hooks/messageQueries'
 import { AllLLMProviders } from '~/utils/modelProviders/LLMProvider'
 import util from 'util'
+import { useAuth } from 'react-oidc-context';
+import { User } from 'oidc-client-ts'
 
 const montserrat_med = Montserrat({
   weight: '500',
@@ -94,7 +94,7 @@ export const Chat = memo(
     currentEmail,
   }: Props) => {
     const { t } = useTranslation('chat')
-    const clerk_obj = useUser()
+    const { user, isLoading, isAuthenticated } = useAuth()
     const router = useRouter()
     const queryClient = useQueryClient()
     // const
@@ -103,7 +103,7 @@ export const Chat = memo(
       // /CS-125/dashboard --> CS-125
       return router.asPath.slice(1).split('/')[0] as string
     }
-    const user_email = extractEmailsFromClerk(clerk_obj.user)[0]
+    const user_email = user?.profile.email
     // const [user_email, setUserEmail] = useState<string | undefined>(undefined)
 
     // const updateConversationMutation = useUpdateConversation(
