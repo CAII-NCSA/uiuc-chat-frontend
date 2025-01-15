@@ -155,11 +155,6 @@ export default function GitHubIngestForm({
         type: 'github',
       }
       setUploadFiles((prevFiles) => [...prevFiles, newFile])
-      setUploadFiles((prevFiles) =>
-        prevFiles.map((file) =>
-          file.name === url ? { ...file, status: 'ingesting' } : file,
-        ),
-      )
       try {
         const response = await scrapeWeb(
           url,
@@ -180,14 +175,6 @@ export default function GitHubIngestForm({
           await queryClient.invalidateQueries({
             queryKey: ['documents', project_name],
           })
-        } else {
-          // Handle unsuccessful crawl
-          setUploadFiles((prevFiles) =>
-            prevFiles.map((file) =>
-              file.name === url ? { ...file, status: 'error' } : file,
-            ),
-          )
-          throw new Error('Crawl was not successful')
         }
       } catch (error: any) {
         console.error('Error while scraping web:', error)
@@ -240,6 +227,48 @@ export default function GitHubIngestForm({
       setIsUrlUpdated(false)
     }
   }, [url])
+
+  useEffect(() => {
+    const checkIngestStatus = async () => {
+      const response = await fetch(
+        `/api/materialsTable/docsInProgress?course_name=${project_name}`,
+      )
+      const data = await response.json();
+      setUploadFiles((prev) => {
+        const currentBaseUrls = new Set(prev.map((file) => file.name));
+
+        // Add new files from the fetched data if they have the same base_url as any existing file's base_url
+        const newFiles = data?.documents
+          ?.filter((doc: { base_url: string }) =>
+            !currentBaseUrls.has(doc.base_url) &&
+            prev.some((file) => file.name === doc.base_url)
+          )
+          .map((doc: { base_url: string, url: string }) => ({
+            name: doc.url,
+            status: 'ingesting' as const,
+          })) || [];
+
+        // Update existing files and add new files
+        const updatedFiles = prev.map((file) => {
+          const isIngesting = data?.documents?.some(
+            (doc: { url: string }) => doc.url === file.name
+          );
+          if (file.status === 'uploading' && isIngesting) {
+            return { ...file, status: 'ingesting' as const };
+          } else if (file.status === 'ingesting' && !isIngesting) {
+            return { ...file, status: 'complete' as const };
+          }
+          return file;
+        });
+
+        return [...updatedFiles, ...newFiles];
+      });
+    }
+    const interval = setInterval(checkIngestStatus, 3000)
+    return () => {
+      clearInterval(interval)
+    }
+  }, [project_name])
 
   // if (isLoading) {
   //   return <Skeleton height={200} width={330} radius={'lg'} />
