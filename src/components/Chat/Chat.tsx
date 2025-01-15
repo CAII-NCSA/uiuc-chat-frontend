@@ -269,7 +269,81 @@ export const Chat = memo(
       )
     }, [tools])
 
+    const callLLMForMessageSummary = async (
+      conversation: Conversation,
+    ): Promise<string> => {
+      const chatBody: ChatBody = {
+        conversation: conversation,
+        key: getOpenAIKey(courseMetadata, apiKey),
+        course_name: getCurrentPageName(),
+        stream: false,
+        courseMetadata: courseMetadata,
+        model: selectedConversation?.model,
+        llmProviders: llmProviders,
+      }
+
+      try {
+        const response = await fetch('/api/allNewRoutingChat?summary=true', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(chatBody),
+        })
+        if (!response.ok) {
+          throw new Error('Failed to generate summary')
+        }
+        const result = await response.json()
+        return result.choices[0].message.content || ''
+      } catch (error) {
+        console.error('Error generating conversation summary:', error)
+        return ''
+      }
+    }
+
+    const updateConversationWithSummary = (
+      conversation: Conversation,
+      summary: string,
+    ): Conversation => {
+      const lastMessageIndex = conversation.messages?.length - 1
+      const lastMessage =
+        conversation.messages[conversation.messages.length - 1]
+      if (Array.isArray(lastMessage!.content)) {
+        lastMessage!.content.push({ type: 'summary', text: summary })
+      } else if (typeof lastMessage!.content === 'string') {
+        lastMessage!.content = [
+          { type: 'text', text: lastMessage!.content },
+          { type: 'summary', text: summary },
+        ]
+      }
+      // Update the last message with the new content
+      const updatedMessages = conversation.messages?.map((msg, index) =>
+        index === lastMessageIndex
+          ? { ...msg, content: lastMessage!.content }
+          : msg,
+      )
+
+      // Update the conversation with the new messages
+      conversation = {
+        ...conversation,
+        messages: updatedMessages as Message[],
+      }
+
+      conversation.summary = summary
+      return conversation
+    }
+
     const onMessageReceived = async (conversation: Conversation) => {
+      // Call LLM for conversation summary
+      const summary = await callLLMForMessageSummary(conversation)
+      console.debug('summary: ', summary)
+      conversation = updateConversationWithSummary(conversation, summary)
+      // Update the selected conversation
+      homeDispatch({
+        field: 'selectedConversation',
+        value: conversation,
+      })
+
       // Log conversation to Supabase
       try {
         const response = await fetch(
@@ -289,6 +363,7 @@ export const Chat = memo(
         // return data.success
       } catch (error) {
         console.error('Error setting course data:', error)
+        // return false
       }
     }
 
@@ -313,6 +388,7 @@ export const Chat = memo(
           'handleSend called with model:',
           selectedConversation?.model,
         )
+        
         const startOfHandleSend = performance.now()
         setCurrentMessage(message)
         resetMessageStates()
@@ -350,8 +426,8 @@ export const Chat = memo(
             message.contexts = []
             message.content = Array.isArray(message.content)
               ? message.content.filter(
-                (content) => content.type !== 'tool_image_url',
-              )
+                  (content) => content.type !== 'tool_image_url',
+                )
               : message.content
 
             const updatedMessages = [...(selectedConversation.messages || [])]
@@ -522,8 +598,13 @@ export const Chat = memo(
           // console.log('vector_search_rewrite_disabled setting:', courseMetadata?.vector_search_rewrite_disabled)
 
           // Skip query rewrite if disabled in course metadata or if it's the first message
-          if (courseMetadata?.vector_search_rewrite_disabled || updatedConversation.messages.length <= 1) {
-            console.log('Query rewrite disabled for this course or it is the first message, using original query')
+          if (
+            courseMetadata?.vector_search_rewrite_disabled ||
+            updatedConversation.messages.length <= 1
+          ) {
+            console.log(
+              'Query rewrite disabled for this course or it is the first message, using original query',
+            )
             rewrittenQuery = searchQuery
             homeDispatch({ field: 'wasQueryRewritten', value: false })
             homeDispatch({ field: 'queryRewriteText', value: null })
@@ -547,12 +628,12 @@ export const Chat = memo(
                       .map((msg) => {
                         const contentText = Array.isArray(msg.content)
                           ? msg.content
-                            .filter(
-                              (content) =>
-                                content.type === 'text' && content.text,
-                            )
-                            .map((content) => content.text!)
-                            .join(' ')
+                              .filter(
+                                (content) =>
+                                  content.type === 'text' && content.text,
+                              )
+                              .map((content) => content.text!)
+                              .join(' ')
                           : typeof msg.content === 'string'
                             ? msg.content
                             : ''
@@ -567,12 +648,12 @@ export const Chat = memo(
                       .map((msg) => {
                         const contentText = Array.isArray(msg.content)
                           ? msg.content
-                            .filter(
-                              (content) =>
-                                content.type === 'text' && content.text,
-                            )
-                            .map((content) => content.text!)
-                            .join(' ')
+                              .filter(
+                                (content) =>
+                                  content.type === 'text' && content.text,
+                              )
+                              .map((content) => content.text!)
+                              .join(' ')
                           : typeof msg.content === 'string'
                             ? msg.content
                             : ''
@@ -604,9 +685,9 @@ export const Chat = memo(
                         ? msg.content.trim()
                         : Array.isArray(msg.content)
                           ? msg.content
-                            .map((c) => c.text)
-                            .join(' ')
-                            .trim()
+                              .map((c) => c.text)
+                              .join(' ')
+                              .trim()
                           : '',
                   })),
                 },
@@ -715,7 +796,7 @@ export const Chat = memo(
                 // Check if the response is NO_REWRITE_REQUIRED or if we couldn't extract a valid query
                 if (
                   rewrittenQuery.trim().toUpperCase() ===
-                  'NO_REWRITE_REQUIRED' ||
+                    'NO_REWRITE_REQUIRED' ||
                   !extractedQuery
                 ) {
                   console.log(
@@ -810,16 +891,6 @@ export const Chat = memo(
             model: selectedConversation.model,
           }
           updatedConversation = chatBody.conversation!
-
-          // Action 4: Build Prompt - Put everything together into a prompt
-          // const buildPromptResponse = await fetch('/api/buildPrompt', {
-          //   method: 'POST',
-          //   headers: {
-          //     'Content-Type': 'application/json',
-          //   },
-          //   body: JSON.stringify(chatBody),
-          // })
-          // const builtConversation = await buildPromptResponse.json()
 
           // Update the selected conversation
           homeDispatch({
@@ -1013,15 +1084,13 @@ export const Chat = memo(
                     {
                       id: uuidv4(),
                       role: 'assistant',
-                      content: chunkValue,
+                      content: [{ type: 'text', text: chunkValue }],
                       contexts: message.contexts,
                       feedback: message.feedback,
                       wasQueryRewritten: message.wasQueryRewritten,
                       queryRewriteText: message.queryRewriteText,
                     },
                   ]
-
-                  // console.log('updatedMessages with queryRewrite info:', updatedMessages)
 
                   finalAssistantRespose += chunkValue
                   updatedConversation = {
@@ -1058,16 +1127,20 @@ export const Chat = memo(
                       const updatedMessages = updatedConversation.messages?.map(
                         (msg, index) =>
                           index === lastMessageIndex
-                            ? { ...msg, content: finalAssistantRespose }
+                            ? {
+                                ...msg,
+                                content: [
+                                  { type: 'text', text: finalAssistantRespose },
+                                ],
+                              }
                             : msg,
                       )
 
                       // Update the conversation with the new messages
                       updatedConversation = {
                         ...updatedConversation,
-                        messages: updatedMessages,
+                        messages: updatedMessages as Message[],
                       }
-
                       // Dispatch the updated conversation
                       homeDispatch({
                         field: 'selectedConversation',
@@ -1095,6 +1168,9 @@ export const Chat = memo(
                 'updatedConversation after streaming:',
                 updatedConversation,
               )
+              // generate summary and save updated conversation
+              onMessageReceived(updatedConversation) // kastan here, trying to save message AFTER done streaming. This only saves the user message...
+
               handleUpdateConversation(updatedConversation, {
                 key: 'messages',
                 value: updatedConversation.messages,
@@ -1105,40 +1181,6 @@ export const Chat = memo(
                 updatedConversation,
               )
 
-              onMessageReceived(updatedConversation) // kastan here, trying to save message AFTER done streaming. This only saves the user message...
-
-              // } else {
-              //   onMessageReceived(updatedConversation)
-              // }
-
-              // Save the conversation to the server
-
-              // await saveConversationToServer(updatedConversation).catch(
-              //   (error) => {
-              //     console.error(
-              //       'Error saving updated conversation to server:',
-              //       error,
-              //     )
-              //   },
-              // )
-
-              // const updatedConversations: Conversation[] = conversations.map(
-              //   (conversation) => {
-              //     if (conversation.id === selectedConversation.id) {
-              //       return updatedConversation
-              //     }
-              //     return conversation
-              //   },
-              // )
-              // if (updatedConversations.length === 0) {
-              //   updatedConversations.push(updatedConversation)
-              // }
-              // homeDispatch({
-              //   field: 'conversations',
-              //   value: updatedConversations,
-              // })
-              // console.log('updatedConversations: ', updatedConversations)
-              // saveConversations(updatedConversations)
               homeDispatch({ field: 'messageIsStreaming', value: false })
             } catch (error) {
               console.error('An error occurred: ', error)
@@ -1163,6 +1205,13 @@ export const Chat = memo(
                 ...updatedConversation,
                 messages: updatedMessages,
               }
+              // Call LLM for conversation summary
+              const summary =
+                await callLLMForMessageSummary(updatedConversation)
+              updatedConversation = updateConversationWithSummary(
+                updatedConversation,
+                summary,
+              )
               homeDispatch({
                 field: 'selectedConversation',
                 value: updatedConversation,
@@ -1227,7 +1276,7 @@ export const Chat = memo(
 
         if (imgDescIndex !== -1) {
           // Remove the existing image description
-          ; (currentMessage.content as Content[]).splice(imgDescIndex, 1)
+          ;(currentMessage.content as Content[]).splice(imgDescIndex, 1)
         }
         if (
           selectedConversation?.messages[
@@ -1356,13 +1405,13 @@ export const Chat = memo(
 
     const statements =
       courseMetadata?.example_questions &&
-        courseMetadata.example_questions.length > 0
+      courseMetadata.example_questions.length > 0
         ? courseMetadata.example_questions
         : [
-          'Make a bullet point list of key takeaways from this project.',
-          'What are the best practices for [Activity or Process] in [Context or Field]?',
-          'Can you explain the concept of [Specific Concept] in simple terms?',
-        ]
+            'Make a bullet point list of key takeaways from this project.',
+            'What are the best practices for [Activity or Process] in [Context or Field]?',
+            'Can you explain the concept of [Specific Concept] in simple terms?',
+          ]
 
     // Add this function to create dividers with statements
     const renderIntroductoryStatements = () => {
@@ -1390,8 +1439,9 @@ export const Chat = memo(
                   key={index}
                   className="w-full rounded-lg border-b-2 border-[rgba(42,42,64,0.4)] hover:cursor-pointer hover:bg-[rgba(42,42,64,0.9)]"
                   onClick={() => {
-                    setInputContent('')  // First clear the input
-                    setTimeout(() => {   // Then set it with a small delay
+                    setInputContent('') // First clear the input
+                    setTimeout(() => {
+                      // Then set it with a small delay
                       setInputContent(statement)
                       textareaRef.current?.focus()
                     }, 0)
@@ -1558,6 +1608,7 @@ export const Chat = memo(
             body: JSON.stringify({
               course_name: getCurrentPageName(),
               conversation: updatedConversation,
+              summary: updatedConversation.summary,
             }),
           })
         } catch (error) {
@@ -1613,8 +1664,8 @@ export const Chat = memo(
                   transition={{ duration: 0.25, ease: 'easeInOut' }}
                 >
                   {selectedConversation &&
-                    selectedConversation.messages &&
-                    selectedConversation.messages?.length === 0 ? (
+                  selectedConversation.messages &&
+                  selectedConversation.messages?.length === 0 ? (
                     <>
                       <div className="mt-16">
                         {renderIntroductoryStatements()}
