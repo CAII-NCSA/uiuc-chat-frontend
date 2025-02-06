@@ -87,6 +87,7 @@ const DEFAULT_DOCUMENT_GROUP = {
   checked: true,
 }
 export const modelCached: WebllmModel[] = []
+
 export const Chat = memo(
   ({
     stopConversationRef,
@@ -1100,7 +1101,6 @@ export const Chat = memo(
 
             try {
               // This is after the response is done streaming
-              // saveConversation(updatedConversation)
               console.debug(
                 'updatedConversation after streaming:',
                 updatedConversation,
@@ -1195,12 +1195,10 @@ export const Chat = memo(
               // Do we need this?
               // saveConversation(updatedConversation)
               const updatedConversations: Conversation[] = conversations.map(
-                (conversation) => {
-                  if (conversation.id === selectedConversation.id) {
-                    return updatedConversation
-                  }
-                  return conversation
-                },
+                (conversation) =>
+                  conversation.id === selectedConversation.id
+                    ? updatedConversation
+                    : conversation,
               )
               if (updatedConversations.length === 0) {
                 updatedConversations.push(updatedConversation)
@@ -1604,11 +1602,11 @@ export const Chat = memo(
           />
           <link rel="icon" href="/favicon.ico" />
         </Head>
-        <div className="overflow-wrap relative flex h-screen w-full flex-col overflow-hidden bg-white dark:bg-[#15162c]">
-          <div className="justify-center" style={{ height: '40px' }}>
+        <div className="overflow-wrap relative flex h-[100dvh] w-full flex-col overflow-hidden bg-white dark:bg-[#15162c]">
+          <div className="h-[40px] justify-center">
             <ChatNavbar bannerUrl={bannerUrl as string} isgpt4={true} />
           </div>
-          <div className="mt-10 max-w-full flex-grow overflow-y-auto overflow-x-hidden">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden">
             {modelError ? (
               <ErrorMessageDiv error={modelError} />
             ) : (
@@ -1662,12 +1660,10 @@ export const Chat = memo(
                     </>
                   )}
                 </motion.div>
-                {/* <div className="w-full max-w-[calc(100% - var(--sidebar-width))] mx-auto flex justify-center"> */}
                 <ChatInput
                   stopConversationRef={stopConversationRef}
                   textareaRef={textareaRef}
                   onSend={(message, plugin) => {
-                    // setCurrentMessage(message)
                     handleSend(
                       message,
                       0,
