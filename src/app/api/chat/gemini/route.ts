@@ -1,12 +1,9 @@
 import { type CoreMessage, streamText } from 'ai'
 import { type ChatBody, type Conversation } from '~/types/chat'
-import { createAnthropic } from '@ai-sdk/anthropic'
-import {
-  AnthropicModels,
-  type AnthropicModel,
-} from '~/utils/modelProviders/types/anthropic'
-import { ProviderNames } from '~/utils/modelProviders/LLMProvider'
+import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { decryptKeyIfNeeded } from '~/utils/crypto'
+import { ProviderNames } from '~/utils/modelProviders/LLMProvider'
+import { GeminiModel, GeminiModels } from '~/utils/modelProviders/types/gemini'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
@@ -14,40 +11,29 @@ import { NextResponse } from 'next/server'
 
 export async function POST(req: Request) {
   try {
-    const {
-      chatBody,
-    }: {
-      chatBody: ChatBody
-    } = await req.json()
-
-    console.log('chatBody: ', chatBody)
+    const { chatBody }: { chatBody: ChatBody } = await req.json()
 
     const conversation = chatBody.conversation
     if (!conversation) {
       throw new Error('Conversation is missing from the chat body')
     }
 
-    const apiKey = chatBody.llmProviders?.Anthropic?.apiKey
+    const apiKey = chatBody.llmProviders?.Gemini?.apiKey
     if (!apiKey) {
-      throw new Error('Anthropic API  key is missing')
+      throw new Error('Gemini API key is missing')
     }
 
-    const anthropic = createAnthropic({
+    const gemini = createGoogleGenerativeAI({
       apiKey: await decryptKeyIfNeeded(apiKey),
     })
 
-    if (conversation.messages.length === 0) {
-      throw new Error('Conversation messages array is empty')
-    }
-
-    const model = anthropic(conversation.model.id)
-
+    const model = gemini(conversation.model.id)
     const result = await streamText({
-      model: model,
+      model: model as any,
       messages: convertConversationToVercelAISDKv3(conversation),
       temperature: conversation.temperature,
-      maxTokens: 4096,
     })
+
     return result.toTextStreamResponse()
   } catch (error) {
     if (
@@ -123,15 +109,15 @@ export async function GET(req: Request) {
 
   if (!apiKey) {
     return NextResponse.json(
-      { error: 'Anthropic API key not set.' },
+      { error: 'Gemini API key not set.' },
       { status: 500 },
     )
   }
 
-  const models = Object.values(AnthropicModels) as AnthropicModel[]
+  const models = Object.values(GeminiModels) as GeminiModel[]
 
   return NextResponse.json({
-    provider: ProviderNames.Anthropic,
+    provider: ProviderNames.Gemini,
     models: models,
   })
 }
