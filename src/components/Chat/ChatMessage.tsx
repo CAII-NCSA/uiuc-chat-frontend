@@ -1,5 +1,5 @@
 // ChatMessage.tsx
-import { Text, createStyles, Badge } from '@mantine/core'
+import { Text, createStyles, Badge, Tooltip } from '@mantine/core'
 import {
   IconCheck,
   IconCopy,
@@ -12,6 +12,9 @@ import {
   IconThumbUpFilled,
   IconThumbDownFilled,
   IconX,
+  IconBook2,
+  IconChevronDown,
+  IconBrain,
 } from '@tabler/icons-react'
 import {
   FC,
@@ -21,6 +24,7 @@ import {
   useRef,
   useState,
   useCallback,
+  Fragment,
 } from 'react'
 
 import { useTranslation } from 'next-i18next'
@@ -28,20 +32,22 @@ import { Content, ContextWithMetadata, Message } from '@/types/chat'
 import HomeContext from '~/pages/api/home/home.context'
 import { CodeBlock } from '../Markdown/CodeBlock'
 import { MemoizedReactMarkdown } from '../Markdown/MemoizedReactMarkdown'
+import { ImagePreview } from './ImagePreview'
+import { LoadingSpinner } from '../UIUC-Components/LoadingSpinner'
+import { fetchPresignedUrl } from '~/utils/apiUtils'
 
 import rehypeMathjax from 'rehype-mathjax'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
-
-import { ImagePreview } from './ImagePreview'
-import { LoadingSpinner } from '../UIUC-Components/LoadingSpinner'
-import { fetchPresignedUrl } from '~/utils/apiUtils'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import { montserrat_heading, montserrat_paragraph } from 'fonts'
 import { IntermediateStateAccordion } from '../UIUC-Components/IntermediateStateAccordion'
 import { FeedbackModal } from './FeedbackModal'
 import { saveConversationToServer } from '@/utils/app/conversation'
+import { ContextCards } from '../UIUC-Components/ContextCards'
+import SourcesSidebar from '../UIUC-Components/SourcesSidebar'
+import { useRouter } from 'next/router'
 
 const useStyles = createStyles((theme) => ({
   imageContainerStyle: {
@@ -103,7 +109,140 @@ export interface Props {
   contentRenderer?: (message: Message) => JSX.Element
   onImageUrlsUpdate?: (message: Message, messageIndex: number) => void
   courseName: string
-  isSidebarOpen?: boolean
+}
+
+// Add this helper function before the ChatMessage component
+function extractUsedCitationIndexes(content: string | Content[]): number[] {
+  const text = Array.isArray(content)
+    ? content
+        .filter(item => item.type === 'text')
+        .map(item => item.text)
+        .join(' ')
+    : content;
+
+  const citationRegex = /\((\d+)(?:,\s*p\.\d+)?\)/g;
+  const found: number[] = [];
+  
+  let match;
+  while ((match = citationRegex.exec(text)) !== null) {
+    const idx = parseInt(match[1] as string, 10);
+    if (!Number.isNaN(idx)) {
+      found.push(idx);
+    }
+  }
+  
+  return Array.from(new Set(found)); // Remove duplicates while preserving order
+}
+
+// Add these helper functions before the ChatMessage component
+function getFileType(s3Path?: string, url?: string) {
+  if (s3Path) {
+    const lowerPath = s3Path.toLowerCase()
+    if (lowerPath.endsWith('.pdf')) return 'pdf'
+    if (lowerPath.endsWith('.md')) return 'md'
+    if (lowerPath.endsWith('.rtf')) return 'rtf'
+  }
+  if (url) return 'web'
+  return 'other'
+}
+
+// Add ThinkTagDropdown component
+const ThinkTagDropdown: FC<{ 
+  content: string;
+  isStreaming?: boolean;
+}> = ({ content, isStreaming }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  // Function to process the content and preserve formatting
+  const formatContent = (text: string) => {
+    return text.split('\n').map((line, index) => (
+      <Fragment key={index}>
+        {line}
+        {index < text.split('\n').length - 1 && <br />}
+      </Fragment>
+    ));
+  };
+
+  const handleClick = () => {
+    setIsExpanded(!isExpanded);
+  };
+
+  return (
+    <div 
+      className="think-tag-dropdown"
+      role="region"
+      aria-expanded={isExpanded}
+    >
+      <div 
+        className="think-tag-header"
+        onClick={handleClick}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            handleClick();
+          }
+        }}
+        aria-expanded={isExpanded}
+        aria-controls="think-tag-content"
+      >
+        <div className="flex items-center gap-2">
+          <IconBrain 
+            size={20}
+            className="think-tag-brain-icon"
+          />
+          <span className={`text-base font-medium ${montserrat_paragraph.variable} font-montserratParagraph`}>
+            AI&apos;s Thought Process
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          {isStreaming && <LoadingSpinner size="xs" />}
+          <IconChevronDown 
+            size={20} 
+            className={`think-tag-icon ${isExpanded ? 'expanded' : ''}`}
+          />
+        </div>
+      </div>
+      <div 
+        id="think-tag-content"
+        className={`think-tag-content ${isExpanded ? 'expanded' : ''}`}
+        onClick={isExpanded ? handleClick : undefined}
+        role={isExpanded ? "button" : undefined}
+        tabIndex={isExpanded ? 0 : -1}
+        onKeyDown={isExpanded ? (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            handleClick();
+          }
+        } : undefined}
+      >
+        <div 
+          className={`text-base whitespace-pre-line ${montserrat_paragraph.variable} font-montserratParagraph`}
+        >
+          {formatContent(content)}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Add helper function to extract think tag content
+function extractThinkTagContent(content: string): { thoughts: string | null; remainingContent: string } {
+  if (content.startsWith('<think>')) {
+    const endTagIndex = content.indexOf('</think>');
+    if (endTagIndex !== -1) {
+      // Complete think tag found
+      const thoughts = content.slice(7, endTagIndex).trim();
+      const remainingContent = content.slice(endTagIndex + 8).trim();
+      return { thoughts, remainingContent };
+    } else {
+      // Incomplete think tag (streaming) - treat all content as thoughts
+      const thoughts = content.slice(7).trim();
+      return { thoughts, remainingContent: '' };
+    }
+  }
+  return { thoughts: null, remainingContent: content };
 }
 
 export const ChatMessage: FC<Props> = memo(
@@ -114,7 +253,6 @@ export const ChatMessage: FC<Props> = memo(
     onFeedback,
     onImageUrlsUpdate,
     courseName,
-    isSidebarOpen = false,
   }) => {
     const { t } = useTranslation('chat')
 
@@ -137,7 +275,7 @@ export const ChatMessage: FC<Props> = memo(
     const [isEditing, setIsEditing] = useState<boolean>(false)
     const [isTyping, setIsTyping] = useState<boolean>(false)
     const [messageContent, setMessageContent] = useState<string>('')
-
+    const [localContent, setLocalContent] = useState<string | Content[]>(message.content)
     const [imageUrls, setImageUrls] = useState<Set<string>>(new Set())
 
     const [messagedCopied, setMessageCopied] = useState(false)
@@ -153,6 +291,47 @@ export const ChatMessage: FC<Props> = memo(
     const [isPositiveFeedback, setIsPositiveFeedback] = useState<boolean>(false)
     const [isFeedbackModalOpen, setIsFeedbackModalOpen] =
       useState<boolean>(false)
+
+    const [isSourcesSidebarOpen, setIsSourcesSidebarOpen] = useState(false)
+
+    // Get the right sidebar state from the URL query parameters
+    const router = useRouter()
+    const [isRightSideVisible, setIsRightSideVisible] = useState(false)
+
+    const [sourceThumbnails, setSourceThumbnails] = useState<string[]>([])
+
+    useEffect(() => {
+      const query = new URLSearchParams(window.location.search)
+      const rightSidebarOpen = query.get('rightSidebar') === 'true'
+      setIsRightSideVisible(rightSidebarOpen)
+      
+      // Close Sources sidebar if right sidebar is opened
+      if (rightSidebarOpen) {
+        setIsSourcesSidebarOpen(false)
+      }
+    }, [router.asPath])
+
+    // Function to handle opening/closing the Sources sidebar
+    const handleSourcesSidebarToggle = (open: boolean) => {
+      setIsSourcesSidebarOpen(open)
+      // If opening the Sources sidebar, close the right sidebar
+      if (open) {
+        const currentPath = router.asPath.split('?')[0] // Get the current path without query params
+        const newUrl = new URL(window.location.origin + currentPath)
+        newUrl.searchParams.set('rightSidebar', 'false')
+        router.replace(newUrl.pathname + newUrl.search)
+      }
+    }
+
+    // Function to handle closing the Sources sidebar
+    const handleSourcesSidebarClose = () => {
+      setIsSourcesSidebarOpen(false)
+    }
+
+    // Function to check if any Sources sidebar is open in any message
+    const isAnySidebarOpen = () => {
+      return isSourcesSidebarOpen
+    }
 
     // Cleanup effect for modal
     useEffect(() => {
@@ -613,19 +792,518 @@ export const ChatMessage: FC<Props> = memo(
       processTools()
     }, [message.tools])
 
+    // Add logging for contexts when message prop changes
+    useEffect(() => {
+      if (message.contexts && message.contexts.length > 0) {
+        console.log('ChatMessage received message with contexts:', {
+          messageIndex,
+          contextCount: message.contexts.length,
+          readableFilenames: message.contexts.map(ctx => ({
+            readable_filename: ctx.readable_filename,
+            exists: 'readable_filename' in ctx,
+            type: typeof ctx.readable_filename
+          })),
+          contexts: JSON.stringify(message.contexts, null, 2)
+        })
+      }
+    }, [message, messageIndex])
+
+    // Add this function before the return statement
+    const transformContexts = (contexts: ContextWithMetadata[]) => {
+      console.log('ChatMessage transforming contexts:', JSON.stringify(contexts, null, 2))
+      
+      return contexts.map((context, index) => {
+        console.log(`Processing context ${index}:`, {
+          original_readable_filename: context.readable_filename,
+          original_pagenumber: context.pagenumber,
+          original_metadata: context,
+          s3_path: context.s3_path,
+          url: context.url
+        })
+
+        const readable_filename = context.readable_filename
+        const page_number = context.pagenumber
+
+        console.log(`Transformed context ${index}:`, {
+          final_readable_filename: readable_filename,
+          final_page_number: page_number,
+          final_metadata: context
+        })
+
+        return {
+          ...context,
+          readable_filename,
+          page_number
+        }
+      })
+    }
+
+    console.log('ChatMessage rendering message:', {
+      messageId: message.id,
+      numContexts: message.contexts?.length || 0
+    });
+
+    const firstContext = message.contexts?.[0];
+    if (firstContext) {
+      console.log('First context in message:', {
+        readable_filename: firstContext.readable_filename || 'No filename',
+        pagenumber: firstContext.pagenumber || 'No page number',
+        hasS3Path: !!firstContext.s3_path,
+        hasUrl: !!firstContext.url
+      });
+    }
+
+    // Add this useEffect for loading thumbnails
+    useEffect(() => {
+      let isMounted = true;
+      
+      const loadThumbnails = async () => {
+        if (!message.contexts || message.contexts.length === 0) return;
+        
+        // Track unique sources to avoid duplicates
+        const seenSources = new Set<string>();
+        const uniqueContexts = message.contexts.filter(context => {
+          const sourceKey = context.s3_path || context.url;
+          if (!sourceKey || seenSources.has(sourceKey)) return false;
+          seenSources.add(sourceKey);
+          return true;
+        });
+        
+        const thumbnails = await Promise.all(
+          uniqueContexts.slice(0, 5).map(async (context) => {  // Changed from 3 to 5
+            const fileType = getFileType(context.s3_path, context.url)
+            
+            if (fileType === 'pdf' && courseName) {
+              const thumbnailPath = context.s3_path!.replace('.pdf', '-pg1-thumb.png')
+              try {
+                const presignedUrl = await fetchPresignedUrl(thumbnailPath, courseName)
+                return presignedUrl as string
+              } catch (e) {
+                console.error('Failed to fetch thumbnail:', e)
+                return null
+              }
+            } else if (fileType === 'web' && context.url) {
+              try {
+                const urlObj = new URL(context.url)
+                return `${urlObj.protocol}//${urlObj.hostname}/favicon.ico`
+              } catch (e) {
+                console.error('Failed to get favicon:', e)
+                return null
+              }
+            }
+            return null
+          })
+        )
+        
+        if (isMounted) {
+          setSourceThumbnails(thumbnails.filter((url): url is string => url !== null))
+        }
+      }
+
+      loadThumbnails()
+      
+      return () => {
+        isMounted = false
+      }
+    }, [message.contexts, courseName])
+
+    // Add new function to replace expired links in text
+    async function replaceExpiredLinksInText(text: string | undefined): Promise<string> {
+      if (!text) return '';
+      
+      // Updated regex to capture page numbers in the URL
+      const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^\)]+(?:#page=\d+)?)\)/g;
+      let match;
+      let finalText = text;
+      const tasks = [];
+
+      while ((match = linkRegex.exec(text)) !== null) {
+        const [fullMatch, linkText, linkUrl] = match;
+        if (linkUrl) {
+          tasks.push(
+            (async () => {
+              // Extract page number if present
+              const url = new URL(linkUrl);
+              const pageNumber = url.hash ? url.hash : '';  // Includes #page=X if present
+              url.hash = ''; // Remove hash before processing the main URL
+              
+              const refreshed = await refreshS3LinkIfExpired(url.toString(), courseName);
+              if (refreshed !== url.toString()) {
+                // Reconstruct the link with the page number if it existed
+                const newUrl = pageNumber ? `${refreshed}${pageNumber}` : refreshed;
+                finalText = finalText.replace(fullMatch, `[${linkText}](${newUrl})`);
+              }
+            })()
+          );
+        }
+      }
+      await Promise.all(tasks);
+      return finalText;
+    }
+
+    // Helper function to refresh S3 links if expired
+    async function refreshS3LinkIfExpired(originalLink: string, courseName: string): Promise<string> {
+      try {
+        const urlObject = new URL(originalLink);
+
+        // Is it actually an S3 presigned link?
+        const isS3Presigned = urlObject.searchParams.has('X-Amz-Signature');
+        if (!isS3Presigned) {
+          // If it's not a presigned S3 link, just return it unchanged
+          return originalLink;
+        }
+
+        // Use dayjs-based logic for reading X-Amz-Date and X-Amz-Expires
+        dayjs.extend(utc);
+        let creationDateString = urlObject.searchParams.get('X-Amz-Date') as string;
+
+        // If missing or malformed, treat it as expired, so we can attempt to fetch new
+        if (!creationDateString) {
+          return await getNewPresignedUrl(originalLink, courseName);
+        }
+
+        // Convert 20250101T010101Z => 2025-01-01T01:01:01Z, etc.
+        creationDateString = creationDateString.replace(
+          /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/,
+          '$1-$2-$3T$4:$5:$6Z'
+        );
+
+        const creationDate = dayjs.utc(creationDateString, 'YYYY-MM-DDTHH:mm:ss[Z]');
+        const expiresInSecs = Number(urlObject.searchParams.get('X-Amz-Expires') || '0');
+        const expiryDate = creationDate.add(expiresInSecs, 'second');
+
+        // If link is expired, fetch a new one
+        if (expiryDate.toDate() < new Date()) {
+          return await getNewPresignedUrl(originalLink, courseName);
+        }
+
+        // Otherwise, original is still valid
+        return originalLink;
+      } catch (error) {
+        console.error('Failed to refresh S3 link:', error);
+        return originalLink; // fallback to original if something goes wrong
+      }
+    }
+
+    async function getNewPresignedUrl(originalLink: string, courseName: string): Promise<string> {
+      const s3path = extractPathFromUrl(originalLink);
+      return await fetchPresignedUrl(s3path, courseName) as string;
+    }
+
+    // Add effect for refreshing S3 links
+    useEffect(() => {
+      async function refreshS3LinksInContent() {
+        const contentToProcess = message.content;
+        
+        if (Array.isArray(contentToProcess)) {
+          const updatedContent = await Promise.all(
+            contentToProcess.map(async (contentObj) => {
+              if (contentObj.type === 'text') {
+                // During streaming, don't process S3 links to avoid delays
+                const newText = messageIsStreaming ? 
+                  contentObj.text : 
+                  await replaceExpiredLinksInText(contentObj.text);
+                return { ...contentObj, text: newText };
+              }
+              return contentObj;
+            })
+          );
+          setLocalContent(updatedContent);
+        } else if (typeof contentToProcess === 'string') {
+          const { thoughts, remainingContent } = extractThinkTagContent(contentToProcess);
+          if (thoughts) {
+            // During streaming, don't process S3 links to avoid delays
+            const processedThoughts = messageIsStreaming ? 
+              thoughts : 
+              await replaceExpiredLinksInText(thoughts);
+            const processedContent = messageIsStreaming ? 
+              remainingContent : 
+              await replaceExpiredLinksInText(remainingContent);
+            setLocalContent(`<think>${processedThoughts}</think>${processedContent}`);
+          } else {
+            const newText = messageIsStreaming ? 
+              contentToProcess : 
+              await replaceExpiredLinksInText(contentToProcess);
+            setLocalContent(newText);
+          }
+        }
+      }
+      refreshS3LinksInContent();
+    }, [message.content, messageIsStreaming]);
+
+    // Modify the content rendering logic
+    const renderContent = () => {
+      let contentToRender = '';
+      let thoughtsContent = null;
+
+      // Always use localContent for rendering
+      if (typeof localContent === 'string') {
+        const { thoughts, remainingContent } = extractThinkTagContent(localContent);
+        thoughtsContent = thoughts;
+        contentToRender = remainingContent;
+      } else if (Array.isArray(localContent)) {
+        contentToRender = localContent
+          .filter((content) => content.type === 'text')
+          .map((content) => content.text)
+          .join(' ');
+        const { thoughts, remainingContent } = extractThinkTagContent(contentToRender);
+        thoughtsContent = thoughts;
+        contentToRender = remainingContent;
+      }
+
+      return (
+        <>
+          {thoughtsContent && (
+            <ThinkTagDropdown 
+              content={messageIsStreaming && 
+                     messageIndex === (selectedConversation?.messages.length ?? 0) - 1 
+                     ? `${thoughtsContent} ▍` 
+                     : thoughtsContent}
+              isStreaming={messageIsStreaming && 
+                         messageIndex === (selectedConversation?.messages.length ?? 0) - 1 &&
+                         !contentToRender} 
+            />
+          )}
+          {contentToRender && (
+            <MemoizedReactMarkdown
+              className={`dark:prose-invert linkMarkDown supMarkdown codeBlock prose mb-2 flex-1 flex-col items-start space-y-2`}
+              remarkPlugins={[remarkGfm, remarkMath]}
+              rehypePlugins={[rehypeMathjax]}
+              components={{
+                code({ node, inline, className, children, ...props }) {
+                  const text = String(children);
+
+                  // Simple regex to see if there's a [title](url) pattern
+                  const linkRegex = /\[[^\]]+\]\([^)]+\)/;
+
+                  // If it looks like a link, parse it again as normal Markdown
+                  if (linkRegex.test(text)) {
+                    return (
+                      <MemoizedReactMarkdown
+                        remarkPlugins={[remarkGfm, remarkMath]}
+                        rehypePlugins={[rehypeMathjax]}
+                      >
+                        {text}
+                      </MemoizedReactMarkdown>
+                    );
+                  }
+
+                  // Handle cursor placeholder
+                  if (children.length) {
+                    if (children[0] == '▍') {
+                      return (
+                        <span className="mt-1 animate-pulse cursor-default">
+                          ▍
+                        </span>
+                      )
+                    }
+
+                    children[0] = (children[0] as string).replace(
+                      '`▍`',
+                      '▍',
+                    )
+                  }
+
+                  const match = /language-(\w+)/.exec(className || '')
+
+                  return !inline ? (
+                    <CodeBlock
+                      key={Math.random()}
+                      language={(match && match[1]) || ''}
+                      value={String(children).replace(/\n$/, '')}
+                      style={{
+                        maxWidth: '100%',
+                        overflowX: 'auto',
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-all',
+                        overflowWrap: 'anywhere',
+                      }}
+                      {...props}
+                    />
+                  ) : (
+                    <code
+                      className={'codeBlock'}
+                      {...props}
+                      style={{
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-all',
+                        overflowWrap: 'anywhere',
+                      }}
+                    >
+                      {children}
+                    </code>
+                  )
+                },
+                p({ node, children }) {
+                  return (
+                    <p
+                      className={`self-start text-base font-normal ${montserrat_paragraph.variable} pb-2 font-montserratParagraph`}
+                    >
+                      {children}
+                    </p>
+                  )
+                },
+                ul({ children }) {
+                  return (
+                    <ul
+                      className={`text-base font-normal ${montserrat_paragraph.variable} font-montserratParagraph`}
+                    >
+                      {children}
+                    </ul>
+                  )
+                },
+                ol({ children }) {
+                  return (
+                    <ol
+                      className={`text-base font-normal ${montserrat_paragraph.variable} ml-4 font-montserratParagraph lg:ml-6`}
+                    >
+                      {children}
+                    </ol>
+                  )
+                },
+                li({ children }) {
+                  return (
+                    <li
+                      className={`text-base font-normal ${montserrat_paragraph.variable} break-words font-montserratParagraph`}
+                    >
+                      {children}
+                    </li>
+                  )
+                },
+                table({ children }) {
+                  return (
+                    <table className="border-collapse border border-black px-3 py-1 dark:border-white">
+                      {children}
+                    </table>
+                  )
+                },
+                th({ children }) {
+                  return (
+                    <th className="break-words border border-black bg-gray-500 px-3 py-1 text-white dark:border-white">
+                      {children}
+                    </th>
+                  )
+                },
+                td({ children }) {
+                  return (
+                    <td className="break-words border border-black px-3 py-1 dark:border-white">
+                      {children}
+                    </td>
+                  )
+                },
+                h1({ node, children }) {
+                  return (
+                    <h1
+                      className={`text-4xl font-bold ${montserrat_heading.variable} font-montserratHeading`}
+                    >
+                      {children}
+                    </h1>
+                  )
+                },
+                h2({ node, children }) {
+                  return (
+                    <h2
+                      className={`text-3xl font-bold ${montserrat_heading.variable} font-montserratHeading`}
+                    >
+                      {children}
+                    </h2>
+                  )
+                },
+                h3({ node, children }) {
+                  return (
+                    <h3
+                      className={`text-2xl font-bold ${montserrat_heading.variable} font-montserratHeading`}
+                    >
+                      {children}
+                    </h3>
+                  )
+                },
+                h4({ node, children }) {
+                  return (
+                    <h4
+                      className={`text-lg font-bold ${montserrat_heading.variable} font-montserratHeading`}
+                    >
+                      {children}
+                    </h4>
+                  )
+                },
+                h5({ node, children }) {
+                  return (
+                    <h5
+                      className={`text-base font-bold ${montserrat_heading.variable} font-montserratHeading`}
+                    >
+                      {children}
+                    </h5>
+                  )
+                },
+                h6({ node, children }) {
+                  return (
+                    <h6
+                      className={`text-base font-bold ${montserrat_heading.variable} font-montserratHeading`}
+                    >
+                      {children}
+                    </h6>
+                  )
+                },
+                a({ node, className, children, ...props }) {
+                  const { href, title } = props
+                  // Update citation link detection to check for readable filename
+                  const firstChild = children[0]
+                  const isValidCitation = 
+                    typeof firstChild === 'string' && 
+                    (firstChild.includes('Source') || 
+                     (message.contexts?.some(ctx => 
+                       ctx.readable_filename && firstChild.includes(ctx.readable_filename)
+                     ) ?? false))
+                  
+                  if (isValidCitation) {
+                    return (
+                      <a
+                        id="styledLink"
+                        href={href}
+                        target="_blank"
+                        title={title}
+                        rel="noopener noreferrer"
+                        className={'supMarkdown'}
+                      >
+                        {children}
+                      </a>
+                    )
+                  } else {
+                    return (
+                      <button
+                        id="styledLink"
+                        onClick={() => window.open(href, '_blank')}
+                        title={title}
+                        className={'linkMarkDown'}
+                      >
+                        {children}
+                      </button>
+                    )
+                  }
+                },
+              }}
+            >
+              {messageIsStreaming && 
+               messageIndex === (selectedConversation?.messages.length ?? 0) - 1
+                ? `${contentToRender} ▍`
+                : contentToRender}
+            </MemoizedReactMarkdown>
+          )}
+        </>
+      );
+    };
+
     return (
-      <div
-        className={`group ${
-          message.role === 'assistant'
+      <>
+        <div
+          className={`group md:px-6 ${message.role === 'assistant'
             ? 'border-b border-black/10 bg-gray-50/50 text-gray-800 dark:border-[rgba(42,42,120,0.50)] dark:bg-[#202134] dark:text-gray-100'
             : 'border-b border-black/10 bg-white/50 text-gray-800 dark:border-[rgba(42,42,120,0.50)] dark:bg-[#15162B] dark:text-gray-100'
-        } w-full`}
-        style={{ overflowWrap: 'anywhere' }}
-      >
-        <div className="relative mx-auto flex w-full justify-center px-4 py-4 text-base md:gap-6 md:py-6 lg:px-6">
-          <div
-            className={`flex w-full max-w-[min(100ch,100%)] ${showChatbar ? 'sm:max-w-[min(100ch,calc(100vw-260px-4rem))]' : 'sm:max-w-[min(100ch,calc(100vw-2rem))]'}`}
-          >
+            } max-w-[100%]`}
+          style={{ overflowWrap: 'anywhere' }}
+        >
+          <div className="relative flex w-full px-2 py-4 text-base md:mx-[5%] md:max-w-[90%] md:gap-6 md:p-6 lg:mx-[10%]">
             <div className="min-w-[40px] text-left">
               {message.role === 'assistant' ? (
                 <>
@@ -637,14 +1315,14 @@ export const ChatMessage: FC<Props> = memo(
               )}
             </div>
 
-            <div className="dark:prose-invert prose mt-[-2px] w-full overflow-x-hidden">
+            <div className="dark:prose-invert prose mt-[-2px] flex w-full max-w-full flex-wrap lg:w-[90%]">
               {message.role === 'user' ? (
-                <div className="flex w-full flex-col">
+                <div className="flex w-[90%] flex-col">
                   {isEditing ? (
                     <div className="flex w-full flex-col">
                       <textarea
                         ref={textareaRef}
-                        className="resize-none whitespace-pre-wrap rounded-md border border-gray-300 bg-transparent p-3 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 dark:border-gray-600 dark:bg-[#1E1E3F] dark:focus:border-purple-400"
+                        className="w-full resize-none whitespace-pre-wrap rounded-md border border-gray-300 bg-transparent p-3 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 dark:border-gray-600 dark:bg-[#1E1E3F] dark:focus:border-purple-400"
                         value={messageContent}
                         onChange={handleInputChange}
                         onKeyDown={handlePressEnter}
@@ -680,10 +1358,11 @@ export const ChatMessage: FC<Props> = memo(
                     </div>
                   ) : (
                     <>
-                      <div className="dark:prose-invert prose w-full  flex-1 overflow-x-hidden whitespace-pre-wrap">
+                      <div className="dark:prose-invert prose w-full flex-1 whitespace-pre-wrap">
                         {Array.isArray(message.content) ? (
                           <>
                             <div className="mb-2 flex w-full flex-col items-start space-y-2">
+                              {/* User message text for all messages */}
                               {message.content.map((content, index) => {
                                 if (content.type === 'text') {
                                   if (
@@ -702,6 +1381,7 @@ export const ChatMessage: FC<Props> = memo(
                                   }
                                 }
                               })}
+                              {/* Image previews for all messages */}
                               <div className="-m-1 flex w-full flex-wrap justify-start">
                                 {message.content
                                   .filter((item) => item.type === 'image_url')
@@ -713,9 +1393,7 @@ export const ChatMessage: FC<Props> = memo(
                                       <div className="overflow-hidden rounded-lg shadow-lg">
                                         <ImagePreview
                                           src={
-                                            Array.from(imageUrls)[
-                                              index
-                                            ] as string
+                                            Array.from(imageUrls)[index] as string
                                           }
                                           alt="Chat message"
                                           className={classes.imageStyle}
@@ -725,14 +1403,14 @@ export const ChatMessage: FC<Props> = memo(
                                   ))}
                               </div>
 
+                              {/* Image description loading state for last message */}
                               {isImg2TextLoading &&
                                 (messageIndex ===
                                   (selectedConversation?.messages.length ?? 0) -
-                                    1 ||
+                                  1 ||
                                   messageIndex ===
-                                    (selectedConversation?.messages.length ??
-                                      0) -
-                                      2) && (
+                                  (selectedConversation?.messages.length ?? 0) -
+                                  2) && (
                                   <IntermediateStateAccordion
                                     accordionKey="imageDescription"
                                     title="Image Description"
@@ -750,6 +1428,7 @@ export const ChatMessage: FC<Props> = memo(
                                   />
                                 )}
 
+                              {/* Image description for all messages */}
                               {message.content.some(
                                 (content) =>
                                   content.type === 'text' &&
@@ -757,64 +1436,63 @@ export const ChatMessage: FC<Props> = memo(
                                     ?.trim()
                                     .startsWith('Image description:'),
                               ) && (
-                                <IntermediateStateAccordion
-                                  accordionKey="imageDescription"
-                                  title="Image Description"
-                                  isLoading={false}
-                                  error={false}
-                                  content={
-                                    message.content.find(
-                                      (content) =>
-                                        content.type === 'text' &&
-                                        content.text
-                                          ?.trim()
-                                          .startsWith('Image description:'),
-                                    )?.text ?? 'No image description found'
-                                  }
-                                />
-                              )}
+                                  <IntermediateStateAccordion
+                                    accordionKey="imageDescription"
+                                    title="Image Description"
+                                    isLoading={false}
+                                    error={false}
+                                    content={
+                                      message.content.find(
+                                        (content) =>
+                                          content.type === 'text' &&
+                                          content.text
+                                            ?.trim()
+                                            .startsWith('Image description:'),
+                                      )?.text ?? 'No image description found'
+                                    }
+                                  />
+                                )}
                             </div>
                           </>
                         ) : (
                           <>{message.content}</>
                         )}
                         <div className="flex w-full flex-col items-start space-y-2">
-                          {isQueryRewriting &&
-                            (messageIndex ===
-                              (selectedConversation?.messages.length ?? 0) -
-                                1 ||
-                              messageIndex ===
-                                (selectedConversation?.messages.length ?? 0) -
-                                  2) && (
-                              <IntermediateStateAccordion
-                                accordionKey="query-rewrite"
-                                title="Optimizing search query"
-                                isLoading={isQueryRewriting}
-                                error={false}
-                                content={<></>}
-                              />
-                            )}
+                          {/* Query rewrite loading state - only show for current message */}
+                          {isQueryRewriting && 
+                            (messageIndex === (selectedConversation?.messages.length ?? 0) - 1 ||
+                             messageIndex === (selectedConversation?.messages.length ?? 0) - 2) && (
+                            <IntermediateStateAccordion
+                              accordionKey="query-rewrite"
+                              title="Optimizing search query"
+                              isLoading={isQueryRewriting}
+                              error={false}
+                              content={<></>}
+                            />
+                          )}
 
+                          {/* Query rewrite result - show for any message that was optimized */}
                           {!isQueryRewriting &&
                             message.wasQueryRewritten !== undefined &&
                             message.wasQueryRewritten !== null && (
-                              <IntermediateStateAccordion
-                                accordionKey="query-rewrite-result"
-                                title={
-                                  message.wasQueryRewritten
-                                    ? 'Optimized search query'
-                                    : 'No query optimization necessary'
-                                }
-                                isLoading={false}
-                                error={false}
-                                content={
-                                  message.wasQueryRewritten
-                                    ? message.queryRewriteText
-                                    : "The LLM determined no optimization was necessary. We only optimize when it's necessary to turn a single message into a stand-alone search to retrieve the best documents."
-                                }
-                              />
-                            )}
+                            <IntermediateStateAccordion
+                              accordionKey="query-rewrite-result"
+                              title={
+                                message.wasQueryRewritten
+                                  ? 'Optimized search query'
+                                  : 'No query optimization necessary'
+                              }
+                              isLoading={false}
+                              error={false}
+                              content={
+                                message.wasQueryRewritten
+                                  ? message.queryRewriteText
+                                  : "The LLM determined no optimization was necessary. We only optimize when it's necessary to turn a single message into a stand-alone search to retrieve the best documents."
+                              }
+                            />
+                          )}
 
+                          {/* Retrieval results for all messages */}
                           {message.contexts && message.contexts.length > 0 && (
                             <IntermediateStateAccordion
                               accordionKey="retrieval loading"
@@ -825,13 +1503,13 @@ export const ChatMessage: FC<Props> = memo(
                             />
                           )}
 
+                          {/* Retrieval loading state for last message */}
                           {isRetrievalLoading &&
                             (messageIndex ===
-                              (selectedConversation?.messages.length ?? 0) -
-                                1 ||
+                              (selectedConversation?.messages.length ?? 0) - 1 ||
                               messageIndex ===
-                                (selectedConversation?.messages.length ?? 0) -
-                                  2) && (
+                              (selectedConversation?.messages.length ?? 0) -
+                              2) && (
                               <IntermediateStateAccordion
                                 accordionKey="retrieval loading"
                                 title="Retrieving documents"
@@ -841,13 +1519,13 @@ export const ChatMessage: FC<Props> = memo(
                               />
                             )}
 
+                          {/* Tool Routing loading state for last message */}
                           {isRouting &&
                             (messageIndex ===
-                              (selectedConversation?.messages.length ?? 0) -
-                                1 ||
+                              (selectedConversation?.messages.length ?? 0) - 1 ||
                               messageIndex ===
-                                (selectedConversation?.messages.length ?? 0) -
-                                  2) && (
+                              (selectedConversation?.messages.length ?? 0) -
+                              2) && (
                               <IntermediateStateAccordion
                                 accordionKey={`routing tools`}
                                 title={'Routing the request to relevant tools'}
@@ -857,14 +1535,14 @@ export const ChatMessage: FC<Props> = memo(
                               />
                             )}
 
+                          {/* Tool input arguments state for last message */}
                           {isRouting === false &&
                             message.tools &&
                             (messageIndex ===
-                              (selectedConversation?.messages.length ?? 0) -
-                                1 ||
+                              (selectedConversation?.messages.length ?? 0) - 1 ||
                               messageIndex ===
-                                (selectedConversation?.messages.length ?? 0) -
-                                  2) && (
+                              (selectedConversation?.messages.length ?? 0) -
+                              2) && (
                               <>
                                 {message.tools.map((response, index) => (
                                   <IntermediateStateAccordion
@@ -892,8 +1570,7 @@ export const ChatMessage: FC<Props> = memo(
                                           <div>
                                             <div className="flex overflow-x-auto">
                                               {JSON.parse(
-                                                response
-                                                  .aiGeneratedArgumentValues
+                                                response.aiGeneratedArgumentValues
                                                   .image_urls,
                                               ).length > 0 ? (
                                                 JSON.parse(
@@ -944,85 +1621,86 @@ export const ChatMessage: FC<Props> = memo(
                               </>
                             )}
 
+                          {/* Tool output states for last message */}
                           {(messageIndex ===
                             (selectedConversation?.messages.length ?? 0) - 1 ||
                             messageIndex ===
-                              (selectedConversation?.messages.length ?? 0) -
-                                2) && (
-                            <>
-                              {message.tools?.map((response, index) => (
-                                <IntermediateStateAccordion
-                                  key={`tool-${index}`}
-                                  accordionKey={`tool-${index}`}
-                                  title={
-                                    <>
-                                      Tool output from{' '}
-                                      <Badge
-                                        color={response.error ? 'red' : 'grape'}
-                                        radius="md"
-                                        size="sm"
-                                      >
-                                        {response.readableName}
-                                      </Badge>
-                                    </>
-                                  }
-                                  isLoading={
-                                    response.output === undefined &&
-                                    response.error === undefined
-                                  }
-                                  error={response.error ? true : false}
-                                  content={
-                                    <>
-                                      {response.error ? (
-                                        <span>{response.error}</span>
-                                      ) : (
-                                        <>
-                                          <div
-                                            style={{
-                                              display: 'flex',
-                                              overflowX: 'auto',
-                                              gap: '10px',
-                                            }}
-                                          >
-                                            {response.output?.imageUrls &&
-                                              response.output?.imageUrls.map(
-                                                (imageUrl, index) => (
-                                                  <div
-                                                    key={index}
-                                                    className={
-                                                      classes.imageContainerStyle
-                                                    }
-                                                  >
-                                                    <div className="overflow-hidden rounded-lg shadow-lg">
-                                                      <ImagePreview
-                                                        src={imageUrl}
-                                                        alt={`Tool output image ${index}`}
-                                                        className={
-                                                          classes.imageStyle
-                                                        }
-                                                      />
+                            (selectedConversation?.messages.length ?? 0) -
+                            2) && (
+                              <>
+                                {message.tools?.map((response, index) => (
+                                  <IntermediateStateAccordion
+                                    key={`tool-${index}`}
+                                    accordionKey={`tool-${index}`}
+                                    title={
+                                      <>
+                                        Tool output from{' '}
+                                        <Badge
+                                          color={response.error ? 'red' : 'grape'}
+                                          radius="md"
+                                          size="sm"
+                                        >
+                                          {response.readableName}
+                                        </Badge>
+                                      </>
+                                    }
+                                    isLoading={
+                                      response.output === undefined &&
+                                      response.error === undefined
+                                    }
+                                    error={response.error ? true : false}
+                                    content={
+                                      <>
+                                        {response.error ? (
+                                          <span>{response.error}</span>
+                                        ) : (
+                                          <>
+                                            <div
+                                              style={{
+                                                display: 'flex',
+                                                overflowX: 'auto',
+                                                gap: '10px',
+                                              }}
+                                            >
+                                              {response.output?.imageUrls &&
+                                                response.output?.imageUrls.map(
+                                                  (imageUrl, index) => (
+                                                    <div
+                                                      key={index}
+                                                      className={
+                                                        classes.imageContainerStyle
+                                                      }
+                                                    >
+                                                      <div className="overflow-hidden rounded-lg shadow-lg">
+                                                        <ImagePreview
+                                                          src={imageUrl}
+                                                          alt={`Tool output image ${index}`}
+                                                          className={
+                                                            classes.imageStyle
+                                                          }
+                                                        />
+                                                      </div>
                                                     </div>
-                                                  </div>
-                                                ),
-                                              )}
-                                          </div>
-                                          <div>
-                                            {response.output?.text
-                                              ? response.output.text
-                                              : JSON.stringify(
+                                                  ),
+                                                )}
+                                            </div>
+                                            <div>
+                                              {response.output?.text
+                                                ? response.output.text
+                                                : JSON.stringify(
                                                   response.output?.data,
                                                   null,
                                                   2,
                                                 )}
-                                          </div>
-                                        </>
-                                      )}
-                                    </>
-                                  }
-                                />
-                              ))}
-                            </>
-                          )}
+                                            </div>
+                                          </>
+                                        )}
+                                      </>
+                                    }
+                                  />
+                                ))}
+                              </>
+                            )}
                           {(() => {
                             if (
                               messageIsStreaming === undefined ||
@@ -1049,11 +1727,10 @@ export const ChatMessage: FC<Props> = memo(
                             !isQueryRewriting &&
                             loading &&
                             (messageIndex ===
-                              (selectedConversation?.messages.length ?? 0) -
-                                1 ||
+                              (selectedConversation?.messages.length ?? 0) - 1 ||
                               messageIndex ===
-                                (selectedConversation?.messages.length ?? 0) -
-                                  2) &&
+                              (selectedConversation?.messages.length ?? 0) -
+                              2) &&
                             (!message.tools ||
                               message.tools.every(
                                 (tool) =>
@@ -1106,268 +1783,172 @@ export const ChatMessage: FC<Props> = memo(
                   )}
                 </div>
               ) : (
-                <div className="flex flex-col">
+                <div className="flex w-[90%] flex-col">
                   <div className="w-full max-w-full flex-1 overflow-hidden">
-                    <MemoizedReactMarkdown
-                      className="dark:prose-invert linkMarkDown supMarkdown codeBlock prose mb-2 flex-1 flex-col items-start space-y-2 overflow-x-hidden"
-                      remarkPlugins={[remarkGfm, remarkMath]}
-                      rehypePlugins={[rehypeMathjax]}
-                      components={{
-                        code({ node, inline, className, children, ...props }) {
-                          if (children.length) {
-                            if (children[0] == '▍') {
-                              return (
-                                <span className="mt-1 animate-pulse cursor-default">
-                                  ▍
-                                </span>
-                              )
-                            }
-
-                            children[0] = (children[0] as string).replace(
-                              '`▍`',
-                              '▍',
-                            )
-                          }
-
-                          const match = /language-(\w+)/.exec(className || '')
-
-                          return !inline ? (
-                            <CodeBlock
-                              key={Math.random()}
-                              language={(match && match[1]) || ''}
-                              value={String(children).replace(/\n$/, '')}
-                              style={{
-                                maxWidth: '100%',
-                                overflowX: 'auto',
-                                whiteSpace: 'pre-wrap',
-                                wordBreak: 'break-all',
-                                overflowWrap: 'anywhere',
-                              }}
-                              {...props}
-                            />
-                          ) : (
-                            <code
-                              className={'codeBlock'}
-                              {...props}
-                              style={{
-                                whiteSpace: 'pre-wrap',
-                                wordBreak: 'break-all',
-                                overflowWrap: 'anywhere',
-                              }}
-                            >
-                              {children}
-                            </code>
-                          )
-                        },
-                        p({ node, children }) {
-                          return (
-                            <p
-                              className={`self-start text-base font-normal ${montserrat_paragraph.variable} pb-2 font-montserratParagraph`}
-                            >
-                              {children}
-                            </p>
-                          )
-                        },
-                        ul({ children }) {
-                          return (
-                            <ul
-                              className={`text-base font-normal ${montserrat_paragraph.variable} max-w-full overflow-x-auto break-words font-montserratParagraph`}
-                            >
-                              {children}
-                            </ul>
-                          )
-                        },
-                        ol({ children }) {
-                          return (
-                            <ol
-                              className={`text-base font-normal ${montserrat_paragraph.variable} ml-4 max-w-full overflow-x-auto break-words font-montserratParagraph lg:ml-6`}
-                            >
-                              {children}
-                            </ol>
-                          )
-                        },
-                        li({ children }) {
-                          return (
-                            <li
-                              className={`text-base font-normal ${montserrat_paragraph.variable} break-words pr-4 font-montserratParagraph`}
-                              style={{
-                                overflowWrap: 'break-word',
-                                wordWrap: 'break-word',
-                                hyphens: 'auto',
-                              }}
-                            >
-                              {children}
-                            </li>
-                          )
-                        },
-                        table({ children }) {
-                          return (
-                            <table className="border-collapse border border-black px-3 py-1 dark:border-white">
-                              {children}
-                            </table>
-                          )
-                        },
-                        th({ children }) {
-                          return (
-                            <th className="break-words border border-black bg-gray-500 px-3 py-1 text-white dark:border-white">
-                              {children}
-                            </th>
-                          )
-                        },
-                        td({ children }) {
-                          return (
-                            <td className="break-words border border-black px-3 py-1 dark:border-white">
-                              {children}
-                            </td>
-                          )
-                        },
-                        h1({ node, children }) {
-                          return (
-                            <h1
-                              className={`text-4xl font-bold ${montserrat_heading.variable} font-montserratHeading`}
-                            >
-                              {children}
-                            </h1>
-                          )
-                        },
-                        h2({ node, children }) {
-                          return (
-                            <h2
-                              className={`text-3xl font-bold ${montserrat_heading.variable} font-montserratHeading`}
-                            >
-                              {children}
-                            </h2>
-                          )
-                        },
-                        h3({ node, children }) {
-                          return (
-                            <h3
-                              className={`text-2xl font-bold ${montserrat_heading.variable} font-montserratHeading`}
-                            >
-                              {children}
-                            </h3>
-                          )
-                        },
-                        h4({ node, children }) {
-                          return (
-                            <h4
-                              className={`text-lg font-bold ${montserrat_heading.variable} font-montserratHeading`}
-                            >
-                              {children}
-                            </h4>
-                          )
-                        },
-                        h5({ node, children }) {
-                          return (
-                            <h5
-                              className={`text-base font-bold ${montserrat_heading.variable} font-montserratHeading`}
-                            >
-                              {children}
-                            </h5>
-                          )
-                        },
-                        h6({ node, children }) {
-                          return (
-                            <h6
-                              className={`text-base font-bold ${montserrat_heading.variable} font-montserratHeading`}
-                            >
-                              {children}
-                            </h6>
-                          )
-                        },
-                        a({ node, className, children, ...props }) {
-                          const { href, title } = props
-                          const isCitationLink = /^\d+$/.test(
-                            children[0] as string,
-                          )
-                          if (isCitationLink) {
-                            return (
-                              <a
-                                id="styledLink"
-                                href={href}
-                                target="_blank"
-                                title={title}
-                                rel="noopener noreferrer"
-                                className={'supMarkdown'}
-                              >
-                                {children}
-                              </a>
-                            )
-                          } else {
-                            return (
-                              <button
-                                id="styledLink"
-                                onClick={() => window.open(href, '_blank')}
-                                title={title}
-                                className={'linkMarkDown'}
-                              >
-                                {children}
-                              </button>
-                            )
-                          }
-                        },
-                      }}
-                    >
-                      {(() => {
-                        if (
-                          messageIsStreaming &&
-                          messageIndex ===
-                            (selectedConversation?.messages.length ?? 0) - 1
-                        ) {
-                          return `${message.content} ▍`
-                        }
-                        if (Array.isArray(message.content)) {
-                          return (message.content as Content[])
-                            .filter((content) => content.type === 'text')
-                            .map((content) => content.text)
-                            .join(' ')
-                        }
-                        return message.content as string
-                      })()}
-                    </MemoizedReactMarkdown>
+                    {renderContent()}
                   </div>
-                  <div className="-mt-1 flex items-center justify-start gap-2">
-                    <button
-                      className="text-gray-500 opacity-0 transition-opacity duration-200 hover:text-gray-700 focus:opacity-100 group-hover:opacity-100 dark:text-gray-400 dark:hover:text-gray-300"
-                      onClick={copyOnClick}
-                    >
-                      {messagedCopied ? (
-                        <IconCheck
-                          size={20}
-                          className="text-green-500 dark:text-green-400"
-                        />
-                      ) : (
-                        <IconCopy size={20} />
-                      )}
-                    </button>
-                    <button
-                      className="text-gray-500 opacity-0 transition-opacity duration-200 hover:text-gray-700 focus:opacity-100 group-hover:opacity-100 dark:text-gray-400 dark:hover:text-gray-300"
-                      onClick={handleThumbsUp}
-                    >
-                      <div className="opacity-0 transition-opacity duration-200 group-hover:opacity-100">
-                        {isThumbsUp ? (
-                          <IconThumbUpFilled size={20} />
-                        ) : (
-                          <IconThumbUp size={20} />
-                        )}
+                  {/* Action Buttons Container */}
+                  <div className="flex flex-col gap-2">
+                    {/* Sources button */}
+                    {message.contexts && 
+                     message.contexts.length > 0 && 
+                     !(messageIsStreaming && messageIndex === (selectedConversation?.messages.length ?? 0) - 1) &&
+                     !(loading && messageIndex === (selectedConversation?.messages.length ?? 0) - 1) && (
+                      <div className="flex justify-start mb-1 relative z-0">
+                        <button
+                          className="group/button flex items-center gap-0 rounded-xl border border-gray-200 bg-gray-50/50 px-3 py-1.5 text-sm font-medium text-gray-600 shadow-sm transition-all duration-200 hover:border-purple-300 hover:bg-purple-50/50 hover:text-gray-900 dark:border-gray-700 dark:bg-gray-800/30 dark:text-gray-300 dark:hover:border-purple-500/40 dark:hover:bg-purple-900/20 dark:hover:text-gray-100 relative"
+                          onClick={() => handleSourcesSidebarToggle(true)}
+                        >
+                          <span className="whitespace-nowrap">
+                            Sources<span className="ml-0.5 rounded-md bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600 dark:bg-gray-700/50 dark:text-gray-400 group-hover/button:bg-purple-100 group-hover/button:text-purple-600 dark:group-hover/button:bg-purple-900/30 dark:group-hover/button:text-purple-300">
+                              {message.contexts.length}
+                            </span>
+                          </span>
+                          
+                          {sourceThumbnails.length > 0 && (
+                            <div className="flex items-center">
+                              <div className="h-4 border-l border-gray-300 dark:border-gray-600 ml-0.5 mr-1"></div>
+                              <div className="flex relative">
+                                {sourceThumbnails.map((thumbnail, index) => (
+                                  <div
+                                    key={index}
+                                    className="relative h-7 w-7 rounded-lg border-2 border-gray-200 overflow-hidden bg-white shadow-sm transition-transform duration-200 group-hover/button:shadow dark:border-gray-700 dark:bg-gray-800"
+                                    style={{
+                                      marginLeft: index > 0 ? '-0.75rem' : '0',
+                                      zIndex: index,
+                                      transform: `rotate(${index % 2 === 0 ? '-1deg' : '1deg'})`,
+                                    }}
+                                  >
+                                    <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent opacity-0 transition-opacity duration-200 group-hover/button:opacity-100"></div>
+                                    <img
+                                      src={thumbnail}
+                                      alt={`Source ${index + 1}`}
+                                      className="h-full w-full object-cover"
+                                      onError={(e) => {
+                                        e.currentTarget.style.display = 'none'
+                                      }}
+                                    />
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </button>
                       </div>
-                    </button>
-                    <button
-                      className="text-gray-500 opacity-0 transition-opacity duration-200 hover:text-gray-700 focus:opacity-100 group-hover:opacity-100 dark:text-gray-400 dark:hover:text-gray-300"
-                      onClick={handleThumbsDown}
-                    >
-                      {isThumbsDown ? (
-                        <IconThumbDownFilled size={20} />
-                      ) : (
-                        <IconThumbDown size={20} />
-                      )}
-                    </button>
+                    )}
+
+                    {/* Other buttons in their container */}
+                    {!(messageIsStreaming && messageIndex === (selectedConversation?.messages.length ?? 0) - 1) &&
+                     !(loading && messageIndex === (selectedConversation?.messages.length ?? 0) - 1) && (
+                      <div className="flex items-center justify-start gap-2">
+                        <Tooltip 
+                          label={messagedCopied ? "Copied!" : "Copy"} 
+                          position="bottom"
+                          withArrow
+                          arrowSize={6}
+                          transitionProps={{ transition: 'fade', duration: 200 }}
+                          classNames={{
+                            tooltip: 'bg-gray-700 text-white text-sm py-1 px-2',
+                            arrow: 'border-gray-700'
+                          }}
+                        >
+                          <button
+                            className={`text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 ${
+                              messageIndex === (selectedConversation?.messages.length ?? 0) - 1
+                                ? 'opacity-100'
+                                : 'opacity-0 transition-opacity duration-200 focus:opacity-100 group-hover:opacity-100'
+                            }`}
+                            onClick={copyOnClick}
+                          >
+                            {messagedCopied ? (
+                              <IconCheck
+                                size={20}
+                                className="text-green-500 dark:text-green-400"
+                              />
+                            ) : (
+                              <IconCopy size={20} />
+                            )}
+                          </button>
+                        </Tooltip>
+                        <Tooltip 
+                          label={isThumbsUp ? "Remove Good Response" : "Good Response"} 
+                          position="bottom"
+                          withArrow
+                          arrowSize={6}
+                          transitionProps={{ transition: 'fade', duration: 200 }}
+                          classNames={{
+                            tooltip: 'bg-gray-700 text-white text-sm py-1 px-2',
+                            arrow: 'border-gray-700'
+                          }}
+                        >
+                          <button
+                            className={`text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 ${
+                              messageIndex === (selectedConversation?.messages.length ?? 0) - 1
+                                ? 'opacity-100'
+                                : 'opacity-0 transition-opacity duration-200 focus:opacity-100 group-hover:opacity-100'
+                            }`}
+                            onClick={handleThumbsUp}
+                          >
+                            <div className={messageIndex === (selectedConversation?.messages.length ?? 0) - 1 ? '' : 'opacity-0 transition-opacity duration-200 group-hover:opacity-100'}>
+                              {isThumbsUp ? (
+                                <IconThumbUpFilled size={20} />
+                              ) : (
+                                <IconThumbUp size={20} />
+                              )}
+                            </div>
+                          </button>
+                        </Tooltip>
+                        <Tooltip 
+                          label={isThumbsDown ? "Remove Bad Response" : "Bad Response"} 
+                          position="bottom"
+                          withArrow
+                          arrowSize={6}
+                          transitionProps={{ transition: 'fade', duration: 200 }}
+                          classNames={{
+                            tooltip: 'bg-gray-700 text-white text-sm py-1 px-2',
+                            arrow: 'border-gray-700'
+                          }}
+                        >
+                          <button
+                            className={`text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 ${
+                              messageIndex === (selectedConversation?.messages.length ?? 0) - 1
+                                ? 'opacity-100'
+                                : 'opacity-0 transition-opacity duration-200 focus:opacity-100 group-hover:opacity-100'
+                            }`}
+                            onClick={handleThumbsDown}
+                          >
+                            {isThumbsDown ? (
+                              <IconThumbDownFilled size={20} />
+                            ) : (
+                              <IconThumbDown size={20} />
+                            )}
+                          </button>
+                        </Tooltip>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
             </div>
           </div>
         </div>
+
+        {/* Move SourcesSidebar outside the message div but keep it in the fragment */}
+        {isSourcesSidebarOpen && (
+          <SourcesSidebar
+            isOpen={isSourcesSidebarOpen}
+            contexts={transformContexts(message.contexts || [])}
+            onClose={handleSourcesSidebarClose}
+            hideRightSidebarIcon={isAnySidebarOpen}
+            courseName={courseName}
+            citedSourceIndices={
+              message.role === 'assistant' && message.content 
+                ? extractUsedCitationIndexes(message.content) 
+                : undefined
+            }
+          />
+        )}
+
         {isFeedbackModalOpen && (
           <FeedbackModal
             isOpen={isFeedbackModalOpen}
@@ -1375,7 +1956,7 @@ export const ChatMessage: FC<Props> = memo(
             onSubmit={handleFeedbackSubmit}
           />
         )}
-      </div>
+      </>
     )
   },
 )

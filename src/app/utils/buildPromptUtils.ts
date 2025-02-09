@@ -11,11 +11,7 @@ import {
 } from '@/types/chat'
 import { NextApiRequest, NextApiResponse } from 'next'
 import { AnySupportedModel } from '~/utils/modelProviders/LLMProvider'
-import {
-  DEFAULT_SYSTEM_PROMPT,
-  GUIDED_LEARNING_PROMPT,
-  DOCUMENT_FOCUS_PROMPT,
-} from '@/utils/app/const'
+import { DEFAULT_SYSTEM_PROMPT, GUIDED_LEARNING_PROMPT, DOCUMENT_FOCUS_PROMPT } from '@/utils/app/const'
 import { routeModelRequest } from '~/utils/streamProcessing'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -515,55 +511,33 @@ export const getSystemPostPrompt = ({
   const isGuidedLearning = isGuidedLearningEnabled(conversation, courseMetadata)
   const isDocumentsOnly = isDocumentsOnlyEnabled(conversation, courseMetadata)
 
-  // Initialize PostPrompt as an array of strings for easy manipulation
-  const PostPromptLines: string[] = []
+  const postPrompt = `Please analyze and respond to the following question using the excerpts from the provided documents. These documents can be PDF files or web pages. You may also see output from API calls (labeled as "tools") and image descriptions. Use this information to craft a detailed and accurate answer.
 
-  // The main system prompt
-  PostPromptLines.push(
-    `Please analyze and respond to the following question using the excerpts from the provided documents. These documents can be pdf files or web pages. Additionally, you may see the output from API calls (called 'tools') to the user's services which, when relevant, you should use to construct your answer. You may also see image descriptions from images uploaded by the user. Prioritize image descriptions, when helpful, to construct your answer.
-Integrate relevant information from these documents, ensuring each reference is linked to the document's number.${
-      isGuidedLearning
-        ? '\n\nIMPORTANT: While in guided learning mode, you must still cite and link to ALL relevant course materials in the exact format described below, even if they contain direct answers. Never filter out or omit relevant materials - your role is to guide students to explore these materials through questions and hints while ensuring they have access to all relevant sources.'
-        : ''
-    }
+When referencing information from the documents, you MUST include citations inline within your response. For each distinct piece of information, cite the single most relevant source using XML-style citation tags in the following format:
+- Use "<cite>1</cite>" when referencing document 1
 
-When quoting directly from a source document, cite with footnotes linked to the document number and page number, if provided. 
-Summarize or paraphrase other relevant information with inline citations, again referencing the document number and page number, if provided.
-If the answer is not in the provided documents, state so.${
-      isGuidedLearning || isDocumentsOnly
-        ? ''
-        : ' Yet always provide as helpful a response as possible to directly answer the question.'
-    }
-Conclude your response with a LIST of the document titles as clickable placeholders, each linked to its respective document number and page number, if provided.
-Always share page numbers if they were shared with you.
-ALWAYS follow the examples below:
-Insert an inline citation like this in your response: 
-"[1]" if you're referencing the first document or 
-"[1, page: 2]" if you're referencing page 2 of the first document.
-At the end of your response, list the document title with a clickable link, like this: 
-"1. [document_name](#)" if you're referencing the first document or
-"1. [document_name, page: 2](#)" if you're referencing page 2 of the first document.
-Nothing else should prefix or suffix the citation or document name. 
+Here are examples of how to properly integrate citations in your response:
+- "The loop invariant must be true before the first iteration of the loop <cite>1</cite>. Additionally, the time complexity of bubble sort is O(n²) <cite>2</cite>."
+- "Python lists are implemented as dynamic arrays <cite>3</cite>. This means that when the allocated space is filled, Python will automatically resize the array to accommodate more elements."
+- "According to the course syllabus, assignments are due every Friday by 11:59 PM <cite>4</cite>."
 
-Consecutive inline citations are ALWAYS discouraged. Use a maximum of 3 citations. Follow this exact formatting: separate citations with a comma like this: "[1, page: 2], [2, page: 3]" or like this "[1], [2], [3]".
+Citations should be placed immediately after each piece of information they support. Use frequent, focused citations throughout your response to help users easily locate the most relevant source for each specific point. Break down information and cite individual sources to maintain clarity and precision. 
 
-Suppose a document name is shared with you along with the index and pageNumber below like "27: www.pdf, page: 2", "28: www.osd", "29: pdf.www, page 11\n15" where 27, 28, 29 are indices, www.pdf, www.osd, pdf.www are document_name, and 2, 11 are the pageNumbers and 15 is the content of the document, then inline citations and final list of cited documents should ALWAYS be in the following format:
-"""
-The sky is blue. [27, page: 2][28] The grass is green. [29, page: 11]
-Relevant Sources:
+Note: You may see citations in the conversation history that appear differently due to post-processing formatting. Regardless of how they appear in previous messages, always use the XML-style citation format specified above in your responses.
 
-27. [www.pdf, page: 2](#)
-28. [www.osd](#)
-29. [pdf.www, page: 11](#)
-"""
-ONLY return the documents with relevant information and cited in the response. If there are no relevant sources, don't include the "Relevant Sources" section in response.
-The user message will include excerpts from the high-quality documents, APIs/tools, and image descriptions to construct your answer. Each will be labeled with XML-style tags, like <Potentially Relevant Documents> and <Tool Outputs>. Make use of that information when writing your response.`,
-  )
+${isGuidedLearning 
+  ? 'IMPORTANT: While in guided learning mode, you must still cite all relevant course materials using the exact citation format—even if they contain direct answers. Never filter out or omit relevant materials.'
+  : ''}
 
-  // Combine the lines to form the PostPrompt
-  const PostPrompt = PostPromptLines.join('\n')
+${!isGuidedLearning && !isDocumentsOnly 
+  ? 'If the answer is not in the provided documents, state so but still provide as helpful a response as possible to directly answer the question.'
+  : ''}
 
-  return PostPrompt
+When using tool outputs in your response, refer to them by name using code notation (e.g., "as per tool \`exampleTool\`"). Always be honest and transparent about tool results.
+
+The user message includes XML-style tags (e.g., <Potentially Relevant Documents>, <Tool Outputs>). Make sure to integrate this information appropriately in your answer.`.trim()
+
+  return postPrompt
 }
 
 export const getDefaultPostPrompt = (): string => {
@@ -599,8 +573,8 @@ export const getDefaultPostPrompt = (): string => {
       linkParameters: {
         guidedLearning: false,
         documentsOnly: false,
-        systemPromptOnly: false,
-      },
+        systemPromptOnly: false
+      }
     } as Conversation,
     courseMetadata: defaultCourseMetadata,
   })

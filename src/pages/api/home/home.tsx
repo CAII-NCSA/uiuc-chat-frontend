@@ -342,7 +342,7 @@ const Home = ({
     const newLinkParameters = {
       guidedLearning: link_parameters.guidedLearning || false,
       documentsOnly: link_parameters.documentsOnly || false,
-      systemPromptOnly: link_parameters.systemPromptOnly || false,
+      systemPromptOnly: link_parameters.systemPromptOnly || false
     }
 
     const newConversation: Conversation = {
@@ -357,7 +357,7 @@ const Home = ({
       projectName: course_name,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      linkParameters: newLinkParameters,
+      linkParameters: newLinkParameters
     }
 
     // Only update selectedConversation, don't add to conversations list yet
