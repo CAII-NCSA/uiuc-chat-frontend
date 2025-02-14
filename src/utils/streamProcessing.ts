@@ -23,6 +23,8 @@ import {
   NCSAHostedVLMProvider,
   OllamaProvider,
   VisionCapableModels,
+  BedrockProvider,
+  GeminiProvider,
 } from '~/utils/modelProviders/LLMProvider'
 import fetchMQRContexts from '~/pages/api/getContextsMQR'
 import fetchContexts from '~/pages/api/getContexts'
@@ -33,6 +35,16 @@ import { v4 as uuidv4 } from 'uuid'
 import { AzureModelID } from './modelProviders/azure'
 import { AnthropicModelID } from './modelProviders/types/anthropic'
 import { NextApiRequest, NextApiResponse } from 'next'
+import { BedrockModelID } from './modelProviders/types/bedrock'
+import { GeminiModelID } from './modelProviders/types/gemini'
+import { runOllamaChat } from '~/app/utils/ollama'
+import { openAIAzureChat } from './modelProviders/OpenAIAzureChat'
+import { runAnthropicChat } from '~/app/utils/anthropic'
+import { NCSAHostedVLMModelID } from './modelProviders/types/NCSAHostedVLM'
+import { runVLLM } from '~/app/utils/vllm'
+import { type CoreMessage, streamText } from 'ai'
+import { runGeminiChat } from '~/app/api/chat/gemini/route'
+import { runBedrockChat } from '~/app/api/chat/bedrock/route'
 
 export const maxDuration = 60
 
@@ -787,11 +799,47 @@ export const getOpenAIKey = (
   return key
 }
 
-import { runOllamaChat } from '~/app/utils/ollama'
-import { openAIAzureChat } from './modelProviders/OpenAIAzureChat'
-import { runAnthropicChat } from '~/app/utils/anthropic'
-import { NCSAHostedVLMModelID } from './modelProviders/types/NCSAHostedVLM'
-import { runVLLM } from '~/app/utils/vllm'
+// Helper function to convert conversation to Vercel AI SDK v3 format
+function convertMessagesToVercelAISDKv3(
+  conversation: Conversation,
+): CoreMessage[] {
+  const coreMessages: CoreMessage[] = []
+
+  const systemMessage = conversation.messages.findLast(
+    (msg) => msg.latestSystemMessage !== undefined,
+  )
+  if (systemMessage) {
+    coreMessages.push({
+      role: 'system',
+      content: systemMessage.latestSystemMessage || '',
+    })
+  }
+
+  conversation.messages.forEach((message, index) => {
+    if (message.role === 'system') return
+
+    let content: string
+    if (index === conversation.messages.length - 1 && message.role === 'user') {
+      content = message.finalPromtEngineeredMessage || ''
+      content +=
+        '\n\nIf you use the <Potentially Relevant Documents> in your response, please remember cite your sources using the required formatting, e.g. "The grass is green. [29, page: 11]'
+    } else if (Array.isArray(message.content)) {
+      content = message.content
+        .filter((c) => c.type === 'text')
+        .map((c) => c.text)
+        .join('\n')
+    } else {
+      content = message.content as string
+    }
+
+    coreMessages.push({
+      role: message.role as 'user' | 'assistant',
+      content: content,
+    })
+  })
+
+  return coreMessages
+}
 
 export const routeModelRequest = async (
   chatBody: ChatBody,
@@ -826,6 +874,7 @@ export const routeModelRequest = async (
       selectedConversation.model.id as any,
     )
   ) {
+
     // NCSA Hosted VLM
     return await runVLLM(
       selectedConversation,
@@ -835,8 +884,6 @@ export const routeModelRequest = async (
   } else if (
     Object.values(OllamaModelIDs).includes(selectedConversation.model.id as any)
   ) {
-    // User-supplied Ollama instance
-
     return await runOllamaChat(
       selectedConversation,
       chatBody!.llmProviders!.Ollama as OllamaProvider,
@@ -847,11 +894,10 @@ export const routeModelRequest = async (
       selectedConversation.model.id as any,
     )
   ) {
-    // ANTHROPIC
     try {
       return await runAnthropicChat(
         selectedConversation,
-        chatBody!.llmProviders!.Anthropic as AnthropicProvider,
+        chatBody.llmProviders?.Anthropic as AnthropicProvider,
         chatBody.stream,
       )
     } catch (error) {
@@ -874,8 +920,57 @@ export const routeModelRequest = async (
     ) ||
     Object.values(AzureModelID).includes(selectedConversation.model.id as any)
   ) {
-    // Call the OpenAI or Azure API
     return await openAIAzureChat(chatBody, chatBody.stream)
+  } else if (
+    Object.values(BedrockModelID).includes(
+      selectedConversation.model.id as any,
+    )
+  ) {
+    try {
+      return await runBedrockChat(
+        selectedConversation,
+        chatBody.llmProviders?.Bedrock as BedrockProvider,
+        chatBody.stream,
+      )
+    } catch (error) {
+      return new Response(
+        JSON.stringify({
+          error:
+            error instanceof Error
+              ? error.message
+              : 'Unknown error occurred when streaming Bedrock LLMs.',
+        }),
+        {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      )
+    }
+  } else if (
+    Object.values(GeminiModelID).includes(
+      selectedConversation.model.id as any,
+    )
+  ) {
+    try {
+      return await runGeminiChat(
+        selectedConversation,
+        chatBody.llmProviders?.Gemini as GeminiProvider,
+        chatBody.stream,
+      )
+    } catch (error) {
+      return new Response(
+        JSON.stringify({
+          error:
+            error instanceof Error
+              ? error.message
+              : 'Unknown error occurred when streaming Gemini LLMs.',
+        }),
+        {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      )
+    }
   } else {
     throw new Error(
       `Model '${selectedConversation.model.name}' is not supported.`,
