@@ -135,6 +135,16 @@ export const ChatInput = ({
     setIsFocused(true)
     if (chatInputParentContainerRef.current) {
       chatInputParentContainerRef.current.style.boxShadow = `0 0 2px rgba(42,42,120, 1)`
+
+      // On mobile, scroll the input into view when focused
+      if (window.innerWidth <= 768) {
+        setTimeout(() => {
+          chatInputParentContainerRef.current?.scrollIntoView({
+            behavior: 'smooth',
+            block: 'center',
+          })
+        }, 100)
+      }
     }
   }
 
@@ -806,9 +816,7 @@ export const ChatInput = ({
   }, [handleResize])
 
   return (
-    <div
-      className={`absolute bottom-0 left-0 w-full border-transparent bg-transparent pt-6 dark:border-white/20 md:pt-2`}
-    >
+    <div className="fixed inset-x-0 bottom-0 bg-transparent">
       <div className="stretch mx-2 mt-4 flex flex-col gap-3 last:mb-2 md:mx-4 md:mt-[52px] md:last:mb-6 lg:mx-auto lg:max-w-3xl">
         {messageIsStreaming && (
           <button
@@ -833,7 +841,7 @@ export const ChatInput = ({
 
         <div
           ref={chatInputParentContainerRef}
-          className="absolute bottom-0 mx-4 flex w-[80%] flex-col self-center rounded-t-3xl border border-black/10 bg-[#070712] px-4 pb-8 pt-4 shadow-[0_0_10px_rgba(0,0,0,0.10)] dark:border-gray-900/50 dark:text-white dark:shadow-[0_0_15px_rgba(0,0,0,0.10)] md:mx-20 md:w-[70%]"
+          className="mx-4 flex w-[80%] flex-col self-center rounded-t-3xl border border-black/10 bg-[#070712] px-4 pb-8 pt-4 shadow-[0_0_10px_rgba(0,0,0,0.10)] dark:border-gray-900/50 dark:text-white dark:shadow-[0_0_15px_rgba(0,0,0,0.10)] md:mx-20 md:w-[70%]"
         >
           {/* BUTTON 2: Image Icon and Input */}
           {selectedConversation?.model?.id &&
