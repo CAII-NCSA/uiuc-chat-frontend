@@ -110,6 +110,13 @@ export function convertDBToChatConversation(
           })
         }
       }
+      // add summary message
+      if (msg.summary) {
+        content.push({
+          type: 'summary',
+          text: msg.summary,
+        })
+      }
 
       const feedbackObj = msg.feedback
         ? {
@@ -158,6 +165,7 @@ export function convertChatToDBMessage(
   chatMessage: ChatMessage,
   conversationId: string,
 ): DBMessage {
+  const content_type = ''
   let content_text = ''
   let content_image_urls: string[] = []
   let image_description = ''
@@ -185,9 +193,15 @@ export function convertChatToDBMessage(
       .map((content) => content.image_url?.url || '')
   }
 
+  // Ensure contexts is an array
+  const chatMessageContexts = Array.isArray(chatMessage.contexts)
+    ? chatMessage.contexts
+    : []
+
   return {
     id: chatMessage.id || uuidv4(),
     role: chatMessage.role,
+    // content_type: content_type,
     content_text: content_text,
     content_image_url: content_image_urls,
     image_description: image_description,
