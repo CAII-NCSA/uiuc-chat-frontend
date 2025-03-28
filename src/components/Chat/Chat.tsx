@@ -8,6 +8,7 @@ import {
   useEffect,
   useRef,
   useState,
+  useMemo,
 } from 'react'
 import { Button, Text } from '@mantine/core'
 import { useTranslation } from 'next-i18next'
@@ -256,6 +257,73 @@ export const Chat = memo(
       )
     }, [tools])
 
+    const callLLMForMessageSummary = async (
+      conversation: Conversation,
+    ): Promise<string> => {
+      const chatBody: ChatBody = {
+        conversation: conversation,
+        key: getOpenAIKey(courseMetadata, apiKey),
+        course_name: getCurrentPageName(),
+        stream: false,
+        courseMetadata: courseMetadata,
+        model: selectedConversation?.model,
+        llmProviders: llmProviders,
+        mode: 'chat',
+      }
+
+      try {
+        const url = new URL('/api/allNewRoutingChat', location.href)
+        url.searchParams.set('summary', 'true')
+        const response = await fetch(url.toString(), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(chatBody),
+        })
+        if (!response.ok) {
+          throw new Error('Failed to generate summary')
+        }
+        const result = await response.json()
+        return result.choices[0].message.content || ''
+      } catch (error) {
+        console.error('Error generating conversation summary:', error)
+        return ''
+      }
+    }
+
+    const updateConversationWithSummary = (
+      conversation: Conversation,
+      summary: string,
+    ): Conversation => {
+      // const lastMessageIndex = conversation.messages?.length - 1
+      // const lastMessage =
+      //   conversation.messages[conversation.messages.length - 1]
+      // if (Array.isArray(lastMessage!.content)) {
+      //   lastMessage!.content.push({ type: 'summary', text: summary })
+      // } else if (typeof lastMessage!.content === 'string') {
+      //   lastMessage!.content = [
+      //     { type: 'text', text: lastMessage!.content },
+      //     { type: 'summary', text: summary },
+      //   ]
+      // }
+      // // Update the last message with the new content
+      // const updatedMessages = conversation.messages?.map((msg, index) =>
+      //   index === lastMessageIndex
+      //     ? { ...msg, content: lastMessage!.content }
+      //     : msg,
+      // )
+
+      // // Update the conversation with the new messages
+      // conversation = {
+      //   ...conversation,
+      //   messages: updatedMessages as Message[],
+      // }
+
+      conversation.summary = summary
+      return conversation
+    }
+
     const onMessageReceived = async (conversation: Conversation) => {
       // Log conversation to Supabase
       try {
@@ -276,6 +344,7 @@ export const Chat = memo(
         // return data.success
       } catch (error) {
         console.error('Error setting course data:', error)
+        // return false
       }
     }
 
@@ -337,6 +406,8 @@ export const Chat = memo(
         let searchQuery = Array.isArray(message.content)
           ? message.content.map((content) => content.text).join(' ')
           : message.content
+
+        console.log('searchQuery: ', searchQuery)
 
         if (selectedConversation) {
           // Add this type guard function
@@ -697,7 +768,7 @@ export const Chat = memo(
                   }
                 }
 
-                // console.log('query rewriteResponse:', rewriteResponse)
+                console.log('query rewriteResponse:', rewriteResponse)
 
                 // After processing the query rewrite response
                 if (rewriteResponse instanceof Response) {
@@ -766,7 +837,7 @@ export const Chat = memo(
                   } else {
                     // Use the extracted query
                     rewrittenQuery = extractedQuery
-                    // console.log('Using rewritten query:', rewrittenQuery)
+                    console.log('Using rewritten query:', rewrittenQuery)
                     homeDispatch({ field: 'wasQueryRewritten', value: true })
                     homeDispatch({
                       field: 'queryRewriteText',
@@ -848,16 +919,6 @@ export const Chat = memo(
             mode: 'chat',
           }
           updatedConversation = finalChatBody.conversation!
-
-          // Action 4: Build Prompt - Put everything together into a prompt
-          // const buildPromptResponse = await fetch('/api/buildPrompt', {
-          //   method: 'POST',
-          //   headers: {
-          //     'Content-Type': 'application/json',
-          //   },
-          //   body: JSON.stringify(chatBody),
-          // })
-          // const builtConversation = await buildPromptResponse.json()
 
           // Update the selected conversation
           homeDispatch({
@@ -1039,7 +1100,7 @@ export const Chat = memo(
                     {
                       id: uuidv4(),
                       role: 'assistant',
-                      content: chunkValue,
+                      content: [{ type: 'text', text: chunkValue }],
                       contexts: message.contexts,
                       feedback: message.feedback,
                       wasQueryRewritten: message.wasQueryRewritten,
@@ -1047,17 +1108,11 @@ export const Chat = memo(
                     },
                   ]
 
-                  // console.log('updatedMessages with queryRewrite info:', updatedMessages)
-
                   finalAssistantRespose += chunkValue
                   updatedConversation = {
                     ...updatedConversation,
                     messages: updatedMessages,
                   }
-                  homeDispatch({
-                    field: 'selectedConversation',
-                    value: updatedConversation,
-                  })
                 } else {
                   if (updatedConversation.messages?.length > 0) {
                     const lastMessageIndex =
@@ -1085,21 +1140,20 @@ export const Chat = memo(
                       const updatedMessages = updatedConversation.messages?.map(
                         (msg, index) =>
                           index === lastMessageIndex
-                            ? { ...msg, content: finalAssistantRespose }
+                            ? {
+                                ...msg,
+                                content: [
+                                  { type: 'text', text: finalAssistantRespose },
+                                ],
+                              }
                             : msg,
                       )
 
                       // Update the conversation with the new messages
                       updatedConversation = {
                         ...updatedConversation,
-                        messages: updatedMessages,
+                        messages: updatedMessages as Message[],
                       }
-
-                      // Dispatch the updated conversation
-                      homeDispatch({
-                        field: 'selectedConversation',
-                        value: updatedConversation,
-                      })
                     }
                   }
                 }
@@ -1121,50 +1175,26 @@ export const Chat = memo(
                 'updatedConversation after streaming:',
                 updatedConversation,
               )
+              // Call LLM for conversation summary
+              const summary =
+                await callLLMForMessageSummary(updatedConversation)
+              console.log('summary with not plugin: ', summary)
+              updatedConversation = updateConversationWithSummary(
+                updatedConversation,
+                summary,
+              )
+              onMessageReceived(updatedConversation) // kastan here, trying to save message AFTER done streaming. This only saves the user message...
+
               handleUpdateConversation(updatedConversation, {
                 key: 'messages',
                 value: updatedConversation.messages,
               })
               updateConversationMutation.mutate(updatedConversation)
-              console.debug(
-                'updatedConversation after mutation:',
+              console.log(
+                'updatedConversation after mutation: ',
                 updatedConversation,
               )
 
-              onMessageReceived(updatedConversation) // kastan here, trying to save message AFTER done streaming. This only saves the user message...
-
-              // } else {
-              //   onMessageReceived(updatedConversation)
-              // }
-
-              // Save the conversation to the server
-
-              // await saveConversationToServer(updatedConversation).catch(
-              //   (error) => {
-              //     console.error(
-              //       'Error saving updated conversation to server:',
-              //       error,
-              //     )
-              //   },
-              // )
-
-              // const updatedConversations: Conversation[] = conversations.map(
-              //   (conversation) => {
-              //     if (conversation.id === selectedConversation.id) {
-              //       return updatedConversation
-              //     }
-              //     return conversation
-              //   },
-              // )
-              // if (updatedConversations.length === 0) {
-              //   updatedConversations.push(updatedConversation)
-              // }
-              // homeDispatch({
-              //   field: 'conversations',
-              //   value: updatedConversations,
-              // })
-              // console.log('updatedConversations: ', updatedConversations)
-              // saveConversations(updatedConversations)
               homeDispatch({ field: 'messageIsStreaming', value: false })
             } catch (error) {
               console.error('An error occurred: ', error)
@@ -1189,10 +1219,18 @@ export const Chat = memo(
                 ...updatedConversation,
                 messages: updatedMessages,
               }
-              homeDispatch({
-                field: 'selectedConversation',
-                value: updatedConversation,
-              })
+              // Call LLM for conversation summary
+              const summary =
+                await callLLMForMessageSummary(updatedConversation)
+              console.log('summary with plugin: ', summary)
+              updatedConversation = updateConversationWithSummary(
+                updatedConversation,
+                summary,
+              )
+              // homeDispatch({
+              //   field: 'selectedConversation',
+              //   value: updatedConversation,
+              // })
               // This is after the response is done streaming for plugins
 
               // handleUpdateConversation(updatedConversation, {
@@ -1572,15 +1610,29 @@ export const Chat = memo(
       }
     }, [messagesEndRef, userHasScrolled])
 
-    const statements =
+    const exampleQuestions =
       courseMetadata?.example_questions &&
-        courseMetadata.example_questions.length > 0
+      Array.isArray(courseMetadata.example_questions) &&
+      courseMetadata.example_questions.length > 0
         ? courseMetadata.example_questions
-        : [
+        : null
+    const statements = useMemo(() => {
+      if (
+        courseMetadata?.example_questions &&
+        Array.isArray(courseMetadata.example_questions) &&
+        courseMetadata.example_questions.length > 0
+      ) {
+        return courseMetadata.example_questions
+          .sort(() => 0.5 - Math.random())
+          .slice(0, 5)
+      } else {
+        return [
           'Make a bullet point list of key takeaways from this project.',
           'What are the best practices for [Activity or Process] in [Context or Field]?',
           'Can you explain the concept of [Specific Concept] in simple terms?',
         ]
+      }
+    }, [courseMetadata?.example_questions])
 
     // Add this function to create dividers with statements
     const renderIntroductoryStatements = () => {
@@ -1839,6 +1891,7 @@ export const Chat = memo(
             body: JSON.stringify({
               course_name: getCurrentPageName(),
               conversation: updatedConversation,
+              summary: updatedConversation.summary,
             }),
           })
         } catch (error) {
@@ -1867,10 +1920,10 @@ export const Chat = memo(
     return (
       <>
         <Head>
-          <title>{getCurrentPageName()} - Illinois Chat</title>
+          <title>{getCurrentPageName()} - mHealth Chatbot</title>
           <meta
             name="description"
-            content="The easiest way to train your own AI model and share it like a Google doc."
+            content="mHealth is an AI-powered platform that helps you manage your health and wellness."
           />
           <link rel="icon" href="/favicon.ico" />
         </Head>
