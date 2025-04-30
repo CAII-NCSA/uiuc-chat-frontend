@@ -8,6 +8,7 @@ import {
   useEffect,
   useRef,
   useState,
+  useMemo,
 } from 'react'
 import { Button, Text } from '@mantine/core'
 import { useTranslation } from 'next-i18next'
@@ -256,6 +257,73 @@ export const Chat = memo(
       )
     }, [tools])
 
+    const callLLMForMessageSummary = async (
+      conversation: Conversation,
+    ): Promise<string> => {
+      const chatBody: ChatBody = {
+        conversation: conversation,
+        key: getOpenAIKey(courseMetadata, apiKey),
+        course_name: getCurrentPageName(),
+        stream: false,
+        courseMetadata: courseMetadata,
+        model: selectedConversation?.model,
+        llmProviders: llmProviders,
+        mode: 'chat',
+      }
+
+      try {
+        const url = new URL('/api/allNewRoutingChat', location.href)
+        //url.searchParams.set('summary', 'true')   // removing summary for now
+        const response = await fetch(url.toString(), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(chatBody),
+        })
+        if (!response.ok) {
+          throw new Error('Failed to generate summary')
+        }
+        const result = await response.json()
+        return result.choices[0].message.content || ''
+      } catch (error) {
+        console.error('Error generating conversation summary:', error)
+        return ''
+      }
+    }
+
+    const updateConversationWithSummary = (
+      conversation: Conversation,
+      summary: string,
+    ): Conversation => {
+      // const lastMessageIndex = conversation.messages?.length - 1
+      // const lastMessage =
+      //   conversation.messages[conversation.messages.length - 1]
+      // if (Array.isArray(lastMessage!.content)) {
+      //   lastMessage!.content.push({ type: 'summary', text: summary })
+      // } else if (typeof lastMessage!.content === 'string') {
+      //   lastMessage!.content = [
+      //     { type: 'text', text: lastMessage!.content },
+      //     { type: 'summary', text: summary },
+      //   ]
+      // }
+      // // Update the last message with the new content
+      // const updatedMessages = conversation.messages?.map((msg, index) =>
+      //   index === lastMessageIndex
+      //     ? { ...msg, content: lastMessage!.content }
+      //     : msg,
+      // )
+
+      // // Update the conversation with the new messages
+      // conversation = {
+      //   ...conversation,
+      //   messages: updatedMessages as Message[],
+      // }
+
+      conversation.summary = summary
+      return conversation
+    }
+
     const onMessageReceived = async (conversation: Conversation) => {
       // Log conversation to Supabase
       try {
@@ -312,31 +380,34 @@ export const Chat = memo(
               body: JSON.stringify({
                 projectName: courseName,
               }),
-            });
+            })
 
             if (!response.ok) {
-              throw new Error('Failed to fetch LLM providers');
+              throw new Error('Failed to fetch LLM providers')
             }
 
-            const data = await response.json();
-            llmProviders = data;
+            const data = await response.json()
+            llmProviders = data
 
             if (!llmProviders) {
-              throw new Error('No LLM providers returned from API');
+              throw new Error('No LLM providers returned from API')
             }
           } catch (error) {
-            console.error('Error fetching LLM providers:', error);
+            console.error('Error fetching LLM providers:', error)
             errorToast({
               title: 'Website Error - Please refresh the page',
-              message: 'Failed to fetch LLM providers. Please refresh the page and try again.',
-            });
-            return;
+              message:
+                'Failed to fetch LLM providers. Please refresh the page and try again.',
+            })
+            return
           }
         }
 
         let searchQuery = Array.isArray(message.content)
           ? message.content.map((content) => content.text).join(' ')
           : message.content
+
+        //console.log('searchQuery: ', searchQuery)
 
         if (selectedConversation) {
           // Add this type guard function
@@ -367,8 +438,8 @@ export const Chat = memo(
             message.contexts = []
             message.content = Array.isArray(message.content)
               ? message.content.filter(
-                (content) => content.type !== 'tool_image_url',
-              )
+                  (content) => content.type !== 'tool_image_url',
+                )
               : message.content
 
             const updatedMessages = [...(selectedConversation.messages || [])]
@@ -571,12 +642,12 @@ export const Chat = memo(
                         .map((msg) => {
                           const contentText = Array.isArray(msg.content)
                             ? msg.content
-                              .filter(
-                                (content) =>
-                                  content.type === 'text' && content.text,
-                              )
-                              .map((content) => content.text!)
-                              .join(' ')
+                                .filter(
+                                  (content) =>
+                                    content.type === 'text' && content.text,
+                                )
+                                .map((content) => content.text!)
+                                .join(' ')
                             : typeof msg.content === 'string'
                               ? msg.content
                               : ''
@@ -591,12 +662,12 @@ export const Chat = memo(
                         .map((msg) => {
                           const contentText = Array.isArray(msg.content)
                             ? msg.content
-                              .filter(
-                                (content) =>
-                                  content.type === 'text' && content.text,
-                              )
-                              .map((content) => content.text!)
-                              .join(' ')
+                                .filter(
+                                  (content) =>
+                                    content.type === 'text' && content.text,
+                                )
+                                .map((content) => content.text!)
+                                .join(' ')
                             : typeof msg.content === 'string'
                               ? msg.content
                               : ''
@@ -628,9 +699,9 @@ export const Chat = memo(
                           ? msg.content.trim()
                           : Array.isArray(msg.content)
                             ? msg.content
-                              .map((c) => c.text)
-                              .join(' ')
-                              .trim()
+                                .map((c) => c.text)
+                                .join(' ')
+                                .trim()
                             : '',
                     })),
                   },
@@ -697,7 +768,7 @@ export const Chat = memo(
                   }
                 }
 
-                // console.log('query rewriteResponse:', rewriteResponse)
+                //console.log('query rewriteResponse:', rewriteResponse)
 
                 // After processing the query rewrite response
                 if (rewriteResponse instanceof Response) {
@@ -752,7 +823,7 @@ export const Chat = memo(
                   // Check if the response is NO_REWRITE_REQUIRED or if we couldn't extract a valid query
                   if (
                     rewrittenQuery.trim().toUpperCase() ===
-                    'NO_REWRITE_REQUIRED' ||
+                      'NO_REWRITE_REQUIRED' ||
                     !extractedQuery
                   ) {
                     console.log(
@@ -849,16 +920,6 @@ export const Chat = memo(
           }
           updatedConversation = finalChatBody.conversation!
 
-          // Action 4: Build Prompt - Put everything together into a prompt
-          // const buildPromptResponse = await fetch('/api/buildPrompt', {
-          //   method: 'POST',
-          //   headers: {
-          //     'Content-Type': 'application/json',
-          //   },
-          //   body: JSON.stringify(chatBody),
-          // })
-          // const builtConversation = await buildPromptResponse.json()
-
           // Update the selected conversation
           homeDispatch({
             field: 'selectedConversation',
@@ -913,10 +974,18 @@ export const Chat = memo(
                 // Check if response is ok before proceeding
                 if (!response.ok) {
                   const errorData = await response.json()
-                  console.log('Chat.txs --- errorData from /api/allNewRoutingChat', errorData)
+                  console.log(
+                    'Chat.txs --- errorData from /api/allNewRoutingChat',
+                    errorData,
+                  )
                   // Read our custom error object. But normal errors are captured too via errorData.error.
-                  const customError = new Error(errorData.message || errorData.error || 'The LLM might be overloaded or misconfigured. Please check your API key, or use a different LLM.')
-                    ; (customError as any).title = errorData.title || 'LLM Didn\'t Respond'
+                  const customError = new Error(
+                    errorData.message ||
+                      errorData.error ||
+                      'The LLM might be overloaded or misconfigured. Please check your API key, or use a different LLM.',
+                  )
+                  ;(customError as any).title =
+                    errorData.title || "LLM Didn't Respond"
                   throw customError
                 }
               } catch (error) {
@@ -926,7 +995,10 @@ export const Chat = memo(
 
                 errorToast({
                   title: (error as any).title || 'Error',
-                  message: error instanceof Error ? error.message : 'An unexpected error occurred',
+                  message:
+                    error instanceof Error
+                      ? error.message
+                      : 'An unexpected error occurred',
                 })
                 return
               }
@@ -937,7 +1009,10 @@ export const Chat = memo(
 
               errorToast({
                 title: (error as any).title || 'Error',
-                message: error instanceof Error ? error.message : 'An unexpected error occurred',
+                message:
+                  error instanceof Error
+                    ? error.message
+                    : 'An unexpected error occurred',
               })
               return
             }
@@ -951,12 +1026,15 @@ export const Chat = memo(
               const errorData = await response.json()
               errorToast({
                 title: errorData.title || 'Error',
-                message: errorData.message || 'There was an unexpected error calling the LLM. Try using a different model.',
+                message:
+                  errorData.message ||
+                  'There was an unexpected error calling the LLM. Try using a different model.',
               })
             } catch (error) {
               errorToast({
                 title: 'Error',
-                message: 'There was an unexpected error calling the LLM. Try using a different model.',
+                message:
+                  'There was an unexpected error calling the LLM. Try using a different model.',
               })
             }
             return
@@ -1039,15 +1117,13 @@ export const Chat = memo(
                     {
                       id: uuidv4(),
                       role: 'assistant',
-                      content: chunkValue,
+                      content: [{ type: 'text', text: chunkValue }],
                       contexts: message.contexts,
                       feedback: message.feedback,
                       wasQueryRewritten: message.wasQueryRewritten,
                       queryRewriteText: message.queryRewriteText,
                     },
                   ]
-
-                  // console.log('updatedMessages with queryRewrite info:', updatedMessages)
 
                   finalAssistantRespose += chunkValue
                   updatedConversation = {
@@ -1085,21 +1161,20 @@ export const Chat = memo(
                       const updatedMessages = updatedConversation.messages?.map(
                         (msg, index) =>
                           index === lastMessageIndex
-                            ? { ...msg, content: finalAssistantRespose }
+                            ? {
+                                ...msg,
+                                content: [
+                                  { type: 'text', text: finalAssistantRespose },
+                                ],
+                              }
                             : msg,
                       )
 
                       // Update the conversation with the new messages
                       updatedConversation = {
                         ...updatedConversation,
-                        messages: updatedMessages,
+                        messages: updatedMessages as Message[],
                       }
-
-                      // Dispatch the updated conversation
-                      homeDispatch({
-                        field: 'selectedConversation',
-                        value: updatedConversation,
-                      })
                     }
                   }
                 }
@@ -1121,50 +1196,26 @@ export const Chat = memo(
                 'updatedConversation after streaming:',
                 updatedConversation,
               )
+              // Call LLM for conversation summary
+              // const summary =
+              //   await callLLMForMessageSummary(updatedConversation)
+              // console.log('summary with not plugin: ', summary)
+              // updatedConversation = updateConversationWithSummary(
+              //   updatedConversation,
+              //   summary,
+              // )
+
               handleUpdateConversation(updatedConversation, {
                 key: 'messages',
                 value: updatedConversation.messages,
               })
               updateConversationMutation.mutate(updatedConversation)
-              console.debug(
-                'updatedConversation after mutation:',
+              console.log(
+                'updatedConversation after mutation: ',
                 updatedConversation,
               )
 
               onMessageReceived(updatedConversation) // kastan here, trying to save message AFTER done streaming. This only saves the user message...
-
-              // } else {
-              //   onMessageReceived(updatedConversation)
-              // }
-
-              // Save the conversation to the server
-
-              // await saveConversationToServer(updatedConversation).catch(
-              //   (error) => {
-              //     console.error(
-              //       'Error saving updated conversation to server:',
-              //       error,
-              //     )
-              //   },
-              // )
-
-              // const updatedConversations: Conversation[] = conversations.map(
-              //   (conversation) => {
-              //     if (conversation.id === selectedConversation.id) {
-              //       return updatedConversation
-              //     }
-              //     return conversation
-              //   },
-              // )
-              // if (updatedConversations.length === 0) {
-              //   updatedConversations.push(updatedConversation)
-              // }
-              // homeDispatch({
-              //   field: 'conversations',
-              //   value: updatedConversations,
-              // })
-              // console.log('updatedConversations: ', updatedConversations)
-              // saveConversations(updatedConversations)
               homeDispatch({ field: 'messageIsStreaming', value: false })
             } catch (error) {
               console.error('An error occurred: ', error)
@@ -1189,6 +1240,14 @@ export const Chat = memo(
                 ...updatedConversation,
                 messages: updatedMessages,
               }
+              // Call LLM for conversation summary
+              // const summary =
+              //   await callLLMForMessageSummary(updatedConversation)
+              // console.log('summary with plugin: ', summary)
+              // updatedConversation = updateConversationWithSummary(
+              //   updatedConversation,
+              //   summary,
+              // )
               homeDispatch({
                 field: 'selectedConversation',
                 value: updatedConversation,
@@ -1572,15 +1631,29 @@ export const Chat = memo(
       }
     }, [messagesEndRef, userHasScrolled])
 
-    const statements =
+    const exampleQuestions =
       courseMetadata?.example_questions &&
-        courseMetadata.example_questions.length > 0
+      Array.isArray(courseMetadata.example_questions) &&
+      courseMetadata.example_questions.length > 0
         ? courseMetadata.example_questions
-        : [
+        : null
+    const statements = useMemo(() => {
+      if (
+        courseMetadata?.example_questions &&
+        Array.isArray(courseMetadata.example_questions) &&
+        courseMetadata.example_questions.length > 0
+      ) {
+        return courseMetadata.example_questions
+          .sort(() => 0.5 - Math.random())
+          .slice(0, 5)
+      } else {
+        return [
           'Make a bullet point list of key takeaways from this project.',
           'What are the best practices for [Activity or Process] in [Context or Field]?',
           'Can you explain the concept of [Specific Concept] in simple terms?',
         ]
+      }
+    }, [courseMetadata?.example_questions])
 
     // Add this function to create dividers with statements
     const renderIntroductoryStatements = () => {
@@ -1839,6 +1912,7 @@ export const Chat = memo(
             body: JSON.stringify({
               course_name: getCurrentPageName(),
               conversation: updatedConversation,
+              summary: updatedConversation.summary,
             }),
           })
         } catch (error) {
@@ -1867,10 +1941,10 @@ export const Chat = memo(
     return (
       <>
         <Head>
-          <title>{getCurrentPageName()} - Illinois Chat</title>
+          <title>{getCurrentPageName()} - mHealth Chatbot</title>
           <meta
             name="description"
-            content="The easiest way to train your own AI model and share it like a Google doc."
+            content="mHealth is an AI-powered platform that helps you manage your health and wellness."
           />
           <link rel="icon" href="/favicon.ico" />
         </Head>
@@ -1895,8 +1969,8 @@ export const Chat = memo(
                     transition={{ duration: 0.1 }}
                   >
                     {selectedConversation &&
-                      selectedConversation.messages &&
-                      selectedConversation.messages?.length === 0 ? (
+                    selectedConversation.messages &&
+                    selectedConversation.messages?.length === 0 ? (
                       <>
                         <div className="mt-16">
                           {renderIntroductoryStatements()}
@@ -1914,7 +1988,7 @@ export const Chat = memo(
                                 handleSend(
                                   editedMessage,
                                   selectedConversation?.messages?.length -
-                                  index,
+                                    index,
                                   null,
                                   tools,
                                   enabledDocumentGroups,
